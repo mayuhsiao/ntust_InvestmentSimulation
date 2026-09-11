@@ -59,18 +59,29 @@ function clean(obj) {
 }
 
 export function createFirebaseBackend() {
+  /**
+   * 註冊過程中會先建立 Auth 帳號，那一瞬間 Firebase 就會回報「已登入」，
+   * App 會立刻切到登入後的畫面，害後面的錯誤訊息沒地方顯示。
+   * 因此註冊期間先擋住狀態通知，等整個流程有結果了再一次送出。
+   */
+  let suppressAuth = false
+  let authCallback = null
+  const emitAuth = (id) => authCallback?.(id)
+
   return {
     mode: 'firebase',
     label: 'Firebase 雲端資料庫',
 
     /* ---------------- 帳號 ---------------- */
     onAuthChange(cb) {
+      authCallback = cb
       let unsubscribe = () => {}
       let cancelled = false
       getFirebase()
         .then(({ auth, fbAuth }) => {
           if (cancelled) return
           unsubscribe = fbAuth.onAuthStateChanged(auth, (user) => {
+            if (suppressAuth) return
             cb(user ? idFromEmail(user.email) : null)
           })
         })
@@ -80,6 +91,7 @@ export function createFirebaseBackend() {
         })
       return () => {
         cancelled = true
+        authCallback = null
         unsubscribe()
       }
     },
@@ -195,21 +207,47 @@ export function createFirebaseBackend() {
       if (!id) throw new Error('請輸入學號')
       if (String(password).length < 6) throw new Error('密碼至少 6 個字元')
 
+      suppressAuth = true
+      let createdHere = false
       try {
-        await fbAuth.createUserWithEmailAndPassword(auth, emailFor(id), password)
-      } catch (err) {
-        if (err?.code !== 'auth/email-already-in-use') throw friendly(err)
         try {
-          await fbAuth.signInWithEmailAndPassword(auth, emailFor(id), password)
-        } catch {
-          throw new Error(
-            `學號 ${id} 已經註冊過了。請切換到「登入」分頁，用當初設定的密碼登入；` +
-              '若忘記密碼，請聯絡老師協助重設。',
-          )
+          await fbAuth.createUserWithEmailAndPassword(auth, emailFor(id), password)
+          createdHere = true
+        } catch (err) {
+          if (err?.code !== 'auth/email-already-in-use') throw friendly(err)
+          // 學號已經有帳號（多半是上次註冊到一半失敗）：密碼對得上就接續完成
+          try {
+            await fbAuth.signInWithEmailAndPassword(auth, emailFor(id), password)
+          } catch {
+            throw new Error(
+              `學號 ${id} 已經註冊過了。請切換到「登入」分頁，用當初設定的密碼登入；` +
+                '若忘記密碼，請聯絡老師協助重設。',
+            )
+          }
         }
-      }
 
-      return this.joinRoster(id, { name, group, joinCode })
+        await this.joinRoster(id, { name, group, joinCode })
+        return id
+      } catch (err) {
+        // 這次才建立的帳號就回收掉，不要在 Firebase 留下「有帳號卻不在名單」的孤兒，
+        // 否則同學下次連重新註冊都會被擋，只能找老師到主控台刪除。
+        if (createdHere && auth.currentUser) {
+          try {
+            await fbAuth.deleteUser(auth.currentUser)
+          } catch {
+            /* 刪不掉就登出，至少畫面狀態是乾淨的 */
+          }
+        }
+        try {
+          if (auth.currentUser) await fbAuth.signOut(auth)
+        } catch {
+          /* ignore */
+        }
+        throw err
+      } finally {
+        suppressAuth = false
+        emitAuth(auth.currentUser ? idFromEmail(auth.currentUser.email) : null)
+      }
     },
 
     /** 放棄註冊時刪掉自己的帳號，避免留下用不到的孤兒帳號 */
