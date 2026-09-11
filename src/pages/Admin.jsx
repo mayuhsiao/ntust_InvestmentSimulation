@@ -505,9 +505,10 @@ function ImportPanel() {
 /* ================================================================== */
 
 function ConfigPanel() {
-  const { config, saveConfig } = useApp()
+  const { config, saveConfig, isPractice, trades, settlements, clearTrades, startOfficial, notify } = useApp()
   const [draft, setDraft] = useState(config)
   const [busy, setBusy] = useState(false)
+  const [resetting, setResetting] = useState(false)
 
   useEffect(() => setDraft(config), [config])
 
@@ -521,6 +522,8 @@ function ConfigPanel() {
         name: draft.name,
         startDate: draft.startDate,
         endDate: draft.endDate,
+        practiceUntil: draft.practiceUntil || '',
+        officialStartDate: draft.officialStartDate || '',
         initialCapital: Number(draft.initialCapital) || 0,
         benchmark: String(draft.benchmark || '0050').trim().toUpperCase(),
         feeRate: Number(draft.feeRate),
@@ -534,7 +537,26 @@ function ConfigPanel() {
     }
   }
 
+  async function runReset(mode) {
+    const label = mode === 'official' ? '正式開賽' : '清除測試交易'
+    const msg =
+      mode === 'official'
+        ? `確定要「正式開賽」嗎？\n\n• 刪除全部 ${trades.length} 筆交易紀錄\n• 刪除全部 ${settlements.length} 天結算資料\n• 起始日改為 ${draft.officialStartDate || config.officialStartDate}\n• 結束測試期提示\n\n學生名單與帳號會保留。此動作無法復原。`
+        : `確定要清除全部 ${trades.length} 筆交易紀錄與 ${settlements.length} 天結算嗎？\n\n學生名單與帳號會保留。此動作無法復原。`
+    if (!confirm(msg)) return
+    setResetting(true)
+    try {
+      if (mode === 'official') await startOfficial()
+      else await clearTrades()
+    } catch (err) {
+      notify(`${label}失敗：${err.message}`, 'error')
+    } finally {
+      setResetting(false)
+    }
+  }
+
   return (
+    <div className="stack">
     <Card
       title="競賽設定"
       sub={config.updatedAt ? `最後更新：${dateTime(config.updatedAt)}` : '所有學生共用這組設定'}
@@ -557,6 +579,15 @@ function ConfigPanel() {
           </Field>
           <Field label="起始本金（元）">
             <input type="number" step="100000" value={draft.initialCapital} onChange={set('initialCapital')} />
+          </Field>
+        </div>
+
+        <div className="field-row">
+          <Field label="測試期到哪一天" hint="這天以前畫面會顯示測試期提醒；留空代表已正式開賽">
+            <input type="date" value={draft.practiceUntil || ''} onChange={set('practiceUntil')} />
+          </Field>
+          <Field label="正式開賽日" hint="按下方「正式開賽」時，起始日會換成這一天">
+            <input type="date" value={draft.officialStartDate || ''} onChange={set('officialStartDate')} />
           </Field>
         </div>
 
@@ -595,6 +626,46 @@ function ConfigPanel() {
         </div>
       </div>
     </Card>
+
+    <Card
+      title="重置競賽資料"
+      sub="測試期結束、或想讓同學重新演練時使用。學生名單與帳號一律保留。"
+    >
+      <div className="stack sm">
+        {isPractice ? (
+          <div className="notice warn">
+            目前是<b>測試期</b>（到 {config.practiceUntil} 為止）。同學現在下的單只是練習，
+            正式開賽前請按下面的「正式開賽」把測試資料清乾淨。
+          </div>
+        ) : (
+          <div className="notice">目前為正式競賽期間，起始日 {config.startDate}。</div>
+        )}
+
+        <div className="field-row">
+          <div className="kv"><span>目前交易紀錄</span><b>{trades.length} 筆</b></div>
+          <div className="kv"><span>已保存結算</span><b>{settlements.length} 天</b></div>
+          <div className="kv"><span>正式開賽日</span><b>{config.officialStartDate || '—'}</b></div>
+        </div>
+
+        <div className="row">
+          <button
+            className="primary"
+            onClick={() => runReset('official')}
+            disabled={resetting || !config.officialStartDate}
+          >
+            {resetting ? <span className="loader" /> : `🚀 正式開賽（清除測試資料並把起始日設為 ${config.officialStartDate || '—'}）`}
+          </button>
+          <button className="danger" onClick={() => runReset('clear')} disabled={resetting || !trades.length}>
+            只清除交易紀錄
+          </button>
+        </div>
+
+        <div className="small muted">
+          「只清除交易紀錄」會保留目前的起始日與測試期設定，適合測試期間反覆演練。
+        </div>
+      </div>
+    </Card>
+    </div>
   )
 }
 

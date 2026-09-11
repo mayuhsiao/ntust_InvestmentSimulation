@@ -57,6 +57,8 @@ export function AppProvider({ children }) {
   tradesRef.current = trades
   // 查不到報價的代號（例如打錯或已下市），記下來避免無限重試
   const failedCodesRef = useRef(new Set())
+  // 報價快取只有老師能寫入（見 firestore.rules），學生不必嘗試
+  const isAdminRef = useRef(false)
 
   const notify = useCallback((message, kind = 'info') => {
     setToast({ message, kind, at: Date.now() })
@@ -194,7 +196,10 @@ export function AppProvider({ children }) {
             }
             return next
           })
-          backend.savePrices(persist).catch((err) => console.warn('報價快取寫入失敗', err.message))
+          // 只有老師負責維護全班共用的快取；學生每次都直接向 /api 取得報價
+          if (isAdminRef.current) {
+            backend.savePrices(persist).catch((err) => console.warn('報價快取寫入失敗', err.message))
+          }
         }
         setLastSync(new Date())
       } catch (err) {
@@ -228,6 +233,7 @@ export function AppProvider({ children }) {
     () => Boolean(authId) && (isAdminId(authId) || me?.role === 'admin'),
     [authId, me],
   )
+  isAdminRef.current = isAdmin
 
   const lookup = useMemo(() => makePriceLookup(prices), [prices])
 
@@ -235,6 +241,8 @@ export function AppProvider({ children }) {
   const effectiveEnd = rangeEnd(config, today)
   const notStarted = today < config.startDate
   const ended = today > config.endDate
+  /** 測試期：同學可以先練習下單，正式開賽前資料會被清除 */
+  const isPractice = Boolean(config.practiceUntil) && today <= config.practiceUntil
 
   const calendar = useMemo(
     () => buildCalendar(prices, config.startDate, effectiveEnd, [config.benchmark || '0050', '2330', '0056']),
@@ -352,6 +360,37 @@ export function AppProvider({ children }) {
         setTrades((prev) => prev.filter((t) => t.id !== id))
         notify('已刪除該筆交易', 'success')
       },
+      /** 清除所有交易紀錄與結算（測試期反覆演練用），保留學生名單 */
+      async clearTrades({ withSettlements = true } = {}) {
+        const removed = await backend.clearCollection('trades')
+        setTrades([])
+        let settled = 0
+        if (withSettlements) {
+          settled = await backend.clearCollection('settlements')
+          setSettlements([])
+        }
+        notify(`已清除 ${removed} 筆交易紀錄${withSettlements ? `、${settled} 天結算` : ''}`, 'success')
+        return { removed, settled }
+      },
+
+      /** 正式開賽：清空測試資料，並把起始日切換成正式開賽日 */
+      async startOfficial() {
+        const conf = configRef.current
+        const removed = await backend.clearCollection('trades')
+        const settled = await backend.clearCollection('settlements')
+        setTrades([])
+        setSettlements([])
+        const next = await backend.saveConfig({
+          startDate: conf.officialStartDate || conf.startDate,
+          practiceUntil: '',
+        })
+        const merged = { ...DEFAULT_CONFIG, ...next }
+        setConfigState(merged)
+        syncPrices({ cfg: merged, tradeList: [] })
+        notify(`正式開賽！已清除 ${removed} 筆測試交易，起始日設為 ${merged.startDate}`, 'success')
+        return { removed, settled, config: merged }
+      },
+
       async saveSettlements(rows) {
         const next = await backend.saveSettlements(rows)
         setSettlements((prev) => {
@@ -396,6 +435,7 @@ export function AppProvider({ children }) {
     effectiveEnd,
     notStarted,
     ended,
+    isPractice,
     lastTradingDay,
     tradesByStudent,
     mySnapshot,

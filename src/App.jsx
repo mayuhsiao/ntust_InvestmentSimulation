@@ -26,7 +26,7 @@ function readHash() {
 export default function App() {
   const {
     authId, booting, loading, error, toast, me, isAdmin, config, mode,
-    signOut, refresh, priceSyncing, lastSync, myRank, mySnapshot, lastTradingDay,
+    signOut, refresh, priceSyncing, lastSync, myRank, mySnapshot, lastTradingDay, isPractice,
   } = useApp()
 
   const [page, setPage] = useState(readHash)
@@ -72,6 +72,7 @@ export default function App() {
 
           <div className="row tight small muted" style={{ flexWrap: 'nowrap' }}>
             {mode === 'local' && <span className="badge warn">本機示範模式</span>}
+            {isPractice && <span className="badge warn">測試期</span>}
             {config.lockTrading && <span className="badge warn">交易已鎖定</span>}
             <span className="tabular">結算日 {lastTradingDay}</span>
           </div>
@@ -108,6 +109,14 @@ export default function App() {
       </header>
 
       <main className="content">
+        {isPractice && (
+          <div className="notice warn" style={{ marginBottom: 16 }}>
+            🧪 <b>目前是測試期（到 {config.practiceUntil} 為止）</b>
+            現在可以自由買賣、熟悉操作，所有功能都跟正式競賽一模一樣。
+            <b>{config.officialStartDate} 正式開賽前，這段期間的交易紀錄會全部清除、本金歸零重來</b>，
+            所以請放心亂按。
+          </div>
+        )}
         {error && <div className="notice error" style={{ marginBottom: 16 }}>{error}</div>}
         {active === 'dashboard' && <Dashboard onNavigate={navigate} />}
         {active === 'trade' && <Trade />}

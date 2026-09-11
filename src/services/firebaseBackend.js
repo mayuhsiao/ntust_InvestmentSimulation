@@ -270,6 +270,19 @@ export function createFirebaseBackend() {
       await fs.deleteDoc(fs.doc(db, COLLECTIONS.trades, id))
     },
 
+    /** 清空整個集合（重置測試資料用），回傳刪除筆數 */
+    async clearCollection(name) {
+      const { db, fs } = await getFirebase()
+      const snap = await fs.getDocs(fs.collection(db, name))
+      const docs = snap.docs
+      for (let i = 0; i < docs.length; i += 400) {
+        const batch = fs.writeBatch(db)
+        docs.slice(i, i + 400).forEach((d) => batch.delete(d.ref))
+        await batch.commit()
+      }
+      return docs.length
+    },
+
     /* ---------------- 報價快取 ---------------- */
     async loadPrices() {
       const { db, fs } = await getFirebase()

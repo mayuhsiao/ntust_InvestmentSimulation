@@ -193,6 +193,15 @@ export function createLocalBackend() {
       write(K.trades, read(K.trades, []).filter((t) => t.id !== id))
     },
 
+    /** 清空整個集合（重置測試資料用），回傳刪除筆數 */
+    async clearCollection(name) {
+      const key = K[name] || `${NS}${name}`
+      const before = read(key, [])
+      const count = Array.isArray(before) ? before.length : Object.keys(before || {}).length
+      write(key, Array.isArray(before) ? [] : {})
+      return count
+    },
+
     /* ---------------- 報價快取 ---------------- */
     async loadPrices() {
       return read(K.prices, {})
