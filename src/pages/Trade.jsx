@@ -90,7 +90,9 @@ export default function Trade() {
   const problem = useMemo(() => {
     if (notStarted) return `競賽將於 ${config.startDate} 開始，開賽後才能下單`
     if (locked) return '老師已鎖定交易，目前無法下單'
-    if (!stock) return null
+    if (!stock) return '請先在上方「選擇股票」搜尋並點選一檔股票（例如輸入 2330 後點台積電）'
+    if (loadingQuote) return '報價載入中，請稍候…'
+    if (quoteError) return `取得報價失敗：${quoteError}`
     if (execPrice == null) return '這檔股票在所選日期沒有收盤價，請換一天或換一檔'
     if (outOfRange) return `交易日需在競賽期間內（${config.startDate} ～ ${config.endDate}）`
     if (shares <= 0) return '請輸入交易股數'
@@ -102,7 +104,13 @@ export default function Trade() {
       if (shares > holding.shares) return `賣出股數超過持股（目前 ${lots(holding.shares)}）`
     }
     return null
-  }, [notStarted, locked, stock, execPrice, outOfRange, shares, side, estimate, snap.cash, holding, config])
+  }, [
+    notStarted, locked, stock, loadingQuote, quoteError, execPrice,
+    outOfRange, shares, side, estimate, snap.cash, holding, config,
+  ])
+
+  // 還沒選股票只是「還沒開始」，不是錯誤，用中性樣式提示就好
+  const problemTone = !stock || loadingQuote ? '' : 'warn'
 
   async function submit() {
     if (problem || !estimate || !stock) return
@@ -397,7 +405,7 @@ export default function Trade() {
               </div>
             </div>
 
-            {problem && <div className="notice warn">{problem}</div>}
+            {problem && <div className={`notice ${problemTone}`}>{problem}</div>}
 
             <button
               className={side === 'BUY' ? 'buy' : 'sell'}

@@ -36,10 +36,11 @@ export default function History() {
   const [keyword, setKeyword] = useState('')
   const [student, setStudent] = useState('')
 
+  // 班級競賽講求公開透明，全班交易紀錄開放給所有人查詢（與排行榜一致）
   const source = useMemo(() => {
-    if (!isAdmin || scope === 'me') return myTrades
+    if (scope === 'me') return myTrades
     return student ? trades.filter((t) => t.studentId === student) : trades
-  }, [isAdmin, scope, student, myTrades, trades])
+  }, [scope, student, myTrades, trades])
 
   const rows = useMemo(() => {
     const kw = keyword.trim().toUpperCase()
@@ -87,16 +88,14 @@ export default function History() {
     <div className="stack">
       <Card title="交易紀錄查詢">
         <div className="field-row">
-          {isAdmin && (
-            <div>
-              <label>查詢範圍</label>
-              <select value={scope} onChange={(e) => setScope(e.target.value)}>
-                <option value="me">我的交易</option>
-                <option value="all">全班交易</option>
-              </select>
-            </div>
-          )}
-          {isAdmin && scope === 'all' && (
+          <div>
+            <label>查詢範圍</label>
+            <select value={scope} onChange={(e) => setScope(e.target.value)}>
+              <option value="me">我的交易</option>
+              <option value="all">全班交易</option>
+            </select>
+          </div>
+          {scope === 'all' && (
             <div>
               <label>指定學生</label>
               <select value={student} onChange={(e) => setStudent(e.target.value)}>
@@ -151,7 +150,7 @@ export default function History() {
             <table>
               <thead>
                 <tr>
-                  {isAdmin && scope === 'all' && <th>學生</th>}
+                  {scope === 'all' && <th>學生</th>}
                   <th>日期</th>
                   <th>別</th>
                   <th>股票</th>
@@ -169,7 +168,7 @@ export default function History() {
               <tbody>
                 {rows.map((t) => (
                   <tr key={t.id}>
-                    {isAdmin && scope === 'all' && (
+                    {scope === 'all' && (
                       <td>
                         <span className="tabular">{t.studentId}</span> {nameOf(t.studentId)}
                       </td>
