@@ -97,7 +97,12 @@ export function createLocalBackend() {
       if (!skipPassword && String(password).length < 6) throw new Error('密碼至少 6 個字元')
 
       const secrets = read(K.secrets, {})
-      if (!skipPassword && secrets[id]) throw new Error('此帳號已啟用，請直接登入')
+      // 已經有帳號時：密碼對得上就當作接續完成註冊，否則請他改用登入
+      if (!skipPassword && secrets[id] && secrets[id] !== (await hash(password))) {
+        throw new Error(
+          `學號 ${id} 已經註冊過了。請切換到「登入」分頁，用當初設定的密碼登入；若忘記密碼，請聯絡老師協助重設。`,
+        )
+      }
 
       const students = read(K.students, [])
       let student = students.find((s) => s.studentId === id)

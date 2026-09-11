@@ -59,8 +59,9 @@ export default function CompleteJoin() {
 
           <div className="notice warn" style={{ marginBottom: 16 }}>
             學號 <b className="tabular">{authId}</b> 目前不在名單中。
-            請輸入老師公布的<b>註冊認證碼</b>完成加入；
-            如果老師說已經幫你匯入名單了，請直接聯絡老師確認學號是否一致。
+            請輸入老師公布的<b>註冊認證碼</b>完成加入。
+            <br />
+            若老師說已經幫你匯入名單了，請聯絡老師確認學號是否一致。
           </div>
 
           <form onSubmit={submit} className="stack sm">

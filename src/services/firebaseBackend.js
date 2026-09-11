@@ -185,6 +185,9 @@ export function createFirebaseBackend() {
      * 註冊：先建立 Auth 帳號，再加入名單。
      * 若加入名單失敗（例如認證碼打錯），**保留登入狀態不刪帳號**，
      * 讓 App 顯示「完成註冊」畫面直接重試，不必重新設定密碼。
+     *
+     * 學號已經有帳號時（多半是上次註冊到一半失敗），
+     * 直接用同一組密碼登入後續完成加入名單 —— 對同學來說就是「再註冊一次就好」。
      */
     async activate(studentId, password, { name, group, joinCode } = {}) {
       const { auth, fbAuth } = await getFirebase()
@@ -195,7 +198,15 @@ export function createFirebaseBackend() {
       try {
         await fbAuth.createUserWithEmailAndPassword(auth, emailFor(id), password)
       } catch (err) {
-        throw friendly(err)
+        if (err?.code !== 'auth/email-already-in-use') throw friendly(err)
+        try {
+          await fbAuth.signInWithEmailAndPassword(auth, emailFor(id), password)
+        } catch {
+          throw new Error(
+            `學號 ${id} 已經註冊過了。請切換到「登入」分頁，用當初設定的密碼登入；` +
+              '若忘記密碼，請聯絡老師協助重設。',
+          )
+        }
       }
 
       return this.joinRoster(id, { name, group, joinCode })
