@@ -47,6 +47,8 @@ export function AppProvider({ children }) {
   const [settlements, setSettlements] = useState([])
   const [priceSyncing, setPriceSyncing] = useState(false)
   const [lastSync, setLastSync] = useState(null)
+  /** 已登入、但名單裡還沒有這個學號（例如註冊時認證碼打錯） */
+  const [needsJoin, setNeedsJoin] = useState(false)
 
   // 用 ref 讀取最新值，避免非同步流程抓到過期的 closure
   const pricesRef = useRef(prices)
@@ -87,7 +89,12 @@ export function AppProvider({ children }) {
       return { cfg: { ...DEFAULT_CONFIG, ...cfg }, tradeList, priceCache }
     } catch (err) {
       console.error(err)
-      setError(err.message || '資料載入失敗')
+      const denied = err?.code === 'permission-denied' || /insufficient permissions/i.test(err?.message || '')
+      setError(
+        denied
+          ? '沒有存取資料的權限。可能是你的學號還沒加入班級名單，或 Firestore 安全性規則尚未部署 —— 請聯絡老師確認。'
+          : err.message || '資料載入失敗',
+      )
       throw err
     } finally {
       setLoading(false)
@@ -99,15 +106,40 @@ export function AppProvider({ children }) {
     if (authId === undefined) return
     if (!authId) {
       setBooting(false)
+      setNeedsJoin(false)
       return
     }
-    loadAll()
-      .then(({ cfg, tradeList, priceCache }) => syncPrices({ cfg, tradeList, priceCache }))
-      .catch(() => {})
-    loadStockList()
-      .then(setStockList)
-      .catch((err) => console.warn('代號清單載入失敗', err.message))
-    backend.loadSettlements().then(setSettlements).catch(() => {})
+
+    let cancelled = false
+    ;(async () => {
+      // 先確認自己在不在名單中。安全性規則永遠允許讀自己那一筆，
+      // 所以即使還沒加入名單，這個查詢也不會失敗。
+      try {
+        const mine = await backend.getStudent(authId)
+        if (cancelled) return
+        if (!mine && !isAdminId(authId)) {
+          setNeedsJoin(true)
+          setBooting(false)
+          return
+        }
+        setNeedsJoin(false)
+      } catch (err) {
+        console.warn('確認名單身分失敗', err.message)
+      }
+
+      if (cancelled) return
+      loadAll()
+        .then(({ cfg, tradeList, priceCache }) => syncPrices({ cfg, tradeList, priceCache }))
+        .catch(() => {})
+      loadStockList()
+        .then(setStockList)
+        .catch((err) => console.warn('代號清單載入失敗', err.message))
+      backend.loadSettlements().then(setSettlements).catch(() => {})
+    })()
+
+    return () => {
+      cancelled = true
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authId])
 
@@ -318,6 +350,19 @@ export function AppProvider({ children }) {
         notify('帳號建立成功，歡迎加入！', 'success')
         return result
       },
+      /** 已登入但還沒加入名單時，補填認證碼完成註冊 */
+      async joinRoster(extra) {
+        await backend.joinRoster(authId, extra)
+        setNeedsJoin(false)
+        notify('註冊完成，歡迎加入！', 'success')
+        const res = await loadAll()
+        syncPrices({ cfg: res.cfg, tradeList: res.tradeList, priceCache: res.priceCache })
+      },
+      async abandonRegistration() {
+        await backend.deleteOwnAccount()
+        setNeedsJoin(false)
+        setAuthId(null)
+      },
       loadJoinCode: () => backend.loadJoinCode(),
       async saveJoinCode(code) {
         await backend.saveJoinCode(code)
@@ -433,6 +478,7 @@ export function AppProvider({ children }) {
     settlements,
     priceSyncing,
     lastSync,
+    needsJoin,
     // 衍生
     lookup,
     calendar,

@@ -74,13 +74,30 @@ export function createLocalBackend() {
       return id
     },
 
-    async activate(studentId, password, { name, group, joinCode } = {}) {
+    async getStudent(studentId) {
+      const id = normalizeId(studentId)
+      return read(K.students, []).find((s) => s.studentId === id) || null
+    },
+
+    async joinRoster(studentId, extra) {
+      return this.activate(studentId, null, { ...extra, skipPassword: true })
+    },
+
+    async deleteOwnAccount() {
+      const id = read(K.session, null)
+      if (!id) return
+      await this.removeStudent(id)
+      localStorage.removeItem(K.session)
+      emitAuth(null)
+    },
+
+    async activate(studentId, password, { name, group, joinCode, skipPassword } = {}) {
       const id = normalizeId(studentId)
       if (!id) throw new Error('請輸入學號')
-      if (String(password).length < 6) throw new Error('密碼至少 6 個字元')
+      if (!skipPassword && String(password).length < 6) throw new Error('密碼至少 6 個字元')
 
       const secrets = read(K.secrets, {})
-      if (secrets[id]) throw new Error('此帳號已啟用，請直接登入')
+      if (!skipPassword && secrets[id]) throw new Error('此帳號已啟用，請直接登入')
 
       const students = read(K.students, [])
       let student = students.find((s) => s.studentId === id)
@@ -112,8 +129,10 @@ export function createLocalBackend() {
       if (isAdminId(id)) student.role = 'admin'
 
       write(K.students, students)
-      secrets[id] = await hash(password)
-      write(K.secrets, secrets)
+      if (!skipPassword) {
+        secrets[id] = await hash(password)
+        write(K.secrets, secrets)
+      }
       write(K.session, id)
       emitAuth(id)
       return id

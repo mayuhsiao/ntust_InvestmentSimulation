@@ -7,6 +7,7 @@ import History from './pages/History.jsx'
 import Leaderboard from './pages/Leaderboard.jsx'
 import Admin from './pages/Admin.jsx'
 import Account from './pages/Account.jsx'
+import CompleteJoin from './pages/CompleteJoin.jsx'
 import NtustLogo from './components/NtustLogo.jsx'
 import { pct, tone, dateTime } from './lib/format.js'
 
@@ -28,6 +29,7 @@ export default function App() {
   const {
     authId, booting, loading, error, toast, me, isAdmin, config, mode,
     signOut, refresh, priceSyncing, lastSync, myRank, mySnapshot, lastTradingDay, isPractice,
+    needsJoin,
   } = useApp()
 
   const [page, setPage] = useState(readHash)
@@ -53,6 +55,8 @@ export default function App() {
   }
 
   if (!authId) return <Login />
+  // 已登入但還沒加入名單：先完成註冊，不要讓使用者看到一堆權限錯誤
+  if (needsJoin) return <CompleteJoin />
 
   const visibleTabs = TABS.filter((t) => !t.adminOnly || isAdmin)
   const active = visibleTabs.some((t) => t.key === page) ? page : 'dashboard'
