@@ -3,6 +3,7 @@ import { backend } from '../services/backend.js'
 import { DEFAULT_CONFIG } from '../services/defaults.js'
 import { loadStockList, fetchCloses } from '../services/prices.js'
 import { makePriceLookup, buildCalendar, rankAll, rankGroups, snapshot, navSeries } from '../lib/portfolio.js'
+import { marketSession } from '../lib/market.js'
 import { isAdminId } from '../firebase.js'
 
 const AppContext = createContext(null)
@@ -283,6 +284,24 @@ export function AppProvider({ children }) {
 
   const lastTradingDay = calendar[calendar.length - 1] || effectiveEnd
 
+  /* 交易時段：每分鐘重新判斷一次，讓 14:00 一到畫面自己解鎖 */
+  const [clockTick, setClockTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setClockTick((n) => n + 1), 30000)
+    return () => clearInterval(id)
+  }, [])
+
+  const session = useMemo(
+    () =>
+      marketSession({
+        enabled: config.tradingWindow !== 'always',
+        todayClosed: prices[config.benchmark || '0050']?.closes?.[today] != null,
+      }),
+    // clockTick 是刻意放進來的時間觸發器
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [config.tradingWindow, config.benchmark, prices, today, clockTick],
+  )
+
   const tradesByStudent = useMemo(() => {
     const map = {}
     for (const t of trades) {
@@ -487,6 +506,7 @@ export function AppProvider({ children }) {
     notStarted,
     ended,
     isPractice,
+    session,
     lastTradingDay,
     tradesByStudent,
     mySnapshot,

@@ -21,6 +21,13 @@ export const DEFAULT_CONFIG = {
   benchmark: '0050',
   lockTrading: false, // 鎖定後學生無法下單（結算/展示用）
   allowShort: false, // 不允許超賣（賣出不得超過持股）
+
+  /**
+   * 交易時段限制
+   *   'afterClose' 盤中（平日 09:00–14:00）不開放下單，只能在收盤後交易
+   *   'always'     不限時段
+   */
+  tradingWindow: 'afterClose',
   ...DEFAULT_FEES,
 }
 

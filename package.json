@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "NTUST 理財工具實務與應用 - 台股投資模擬競賽平台",
+  "description": "NTUST 國際經濟趨勢與策略分析(彭文彥) - 台股投資模擬競賽平台",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

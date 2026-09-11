@@ -20,6 +20,7 @@ export default function Trade() {
     addTrade,
     notify,
     notStarted,
+    session,
   } = useApp()
 
   const [stock, setStock] = useState(null)
@@ -85,11 +86,16 @@ export default function Trade() {
   const estimate = execPrice != null && shares > 0 ? settle(side, execPrice, shares, config) : null
 
   const locked = config.lockTrading && !isAdmin
+  // 盤中禁止下單；老師不受限，方便上課示範與補單
+  const sessionBlocked = session.blocked && !isAdmin
   const outOfRange = effectiveDate < config.startDate || effectiveDate > config.endDate
 
   const problem = useMemo(() => {
     if (notStarted) return `競賽將於 ${config.startDate} 開始，開賽後才能下單`
     if (locked) return '老師已鎖定交易，目前無法下單'
+    if (sessionBlocked) {
+      return `現在是${session.label}（${session.time}），本競賽以收盤價成交，盤中不開放下單。今天 ${session.reopenAt} 之後即可用今日收盤價交易。`
+    }
     if (!stock) return '請先在上方「選擇股票」搜尋並點選一檔股票（例如輸入 2330 後點台積電）'
     if (loadingQuote) return '報價載入中，請稍候…'
     if (quoteError) return `取得報價失敗：${quoteError}`
@@ -105,12 +111,12 @@ export default function Trade() {
     }
     return null
   }, [
-    notStarted, locked, stock, loadingQuote, quoteError, execPrice,
-    outOfRange, shares, side, estimate, snap.cash, holding, config,
+    notStarted, locked, sessionBlocked, session, stock, loadingQuote, quoteError,
+    execPrice, outOfRange, shares, side, estimate, snap.cash, holding, config,
   ])
 
   // 還沒選股票只是「還沒開始」，不是錯誤，用中性樣式提示就好
-  const problemTone = !stock || loadingQuote ? '' : 'warn'
+  const problemTone = (!stock || loadingQuote) && !sessionBlocked ? '' : 'warn'
 
   async function submit() {
     if (problem || !estimate || !stock) return
@@ -442,7 +448,9 @@ export default function Trade() {
           <br />
           • 一律以 <b>{effectiveDate}</b> 的收盤價成交，不可指定價格
           <br />
-          • 盤中下單也是用最近一個<b>已收盤</b>交易日的收盤價，當天 14:00 後才會換成今日收盤價
+          • <b>盤中（平日 09:00–14:00）不開放下單</b>，收盤後才能交易
+          <br />
+          • 六日與休市日全天開放，以最近一個交易日的收盤價成交
           <br />
           • 手續費 {(config.feeRate * 100).toFixed(4)}%（最低 {config.minFee} 元），賣出另收證交稅{' '}
           {(config.taxRate * 100).toFixed(2)}%

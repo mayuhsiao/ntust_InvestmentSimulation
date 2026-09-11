@@ -532,6 +532,7 @@ function ConfigPanel() {
         minFee: Number(draft.minFee),
         taxRate: Number(draft.taxRate),
         lockTrading: Boolean(draft.lockTrading),
+        tradingWindow: draft.tradingWindow || 'afterClose',
       })
     } finally {
       setBusy(false)
@@ -612,6 +613,19 @@ function ConfigPanel() {
             <input type="number" step="0.0005" value={draft.taxRate} onChange={set('taxRate')} />
           </Field>
         </div>
+
+        <Field
+          label="交易時段"
+          hint="本競賽以收盤價成交，盤中開放下單會讓同學看著即時走勢用舊收盤價套利"
+        >
+          <select
+            value={draft.tradingWindow || 'afterClose'}
+            onChange={(e) => setDraft((d) => ({ ...d, tradingWindow: e.target.value }))}
+          >
+            <option value="afterClose">只在收盤後交易（平日 09:00–14:00 不開放，六日全天開放）</option>
+            <option value="always">不限時段（隨時都能下單）</option>
+          </select>
+        </Field>
 
         <label style={{ margin: 0 }}>
           <input

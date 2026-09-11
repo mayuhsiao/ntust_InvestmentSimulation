@@ -50,7 +50,7 @@ export default function Login() {
           <NtustLogo size={54} variant="seal" tone="mono" color="#fff" />
           <div>
             <b>國立臺灣科技大學</b>
-            <span>理財工具實務與應用</span>
+            <span>國際經濟趨勢與策略分析(彭文彥)</span>
           </div>
         </div>
 
