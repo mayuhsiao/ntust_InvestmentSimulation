@@ -90,18 +90,20 @@ export function findStock(list, code) {
   return list.find((s) => s.code === c) || null
 }
 
-/* ---------------- 美股搜尋 ---------------- */
+/* ---------------- 伺服器端搜尋 ---------------- */
 
 const searchCache = new Map()
 
 /**
- * 美股代號即時搜尋（美股有 6,000 多檔，不像台股整包下載）。
- * 只有輸入看起來像英文代號或公司名時才會查。
+ * 向伺服器查代號（台股 + 美股）。
+ *
+ * 台股雖然前端也有一份完整清單，但那份有 1.2 MB，
+ * 手機或網路不佳時可能還沒下載完；這支 API 讓「台積電」這種中文查詢
+ * 在任何情況下都找得到，不會因為清單沒載好就失敗。
  */
-export async function searchUsStocks(keyword) {
+export async function searchRemote(keyword) {
   const q = String(keyword || '').trim()
-  // 中文、純數字（台股代號）就不用查美股了
-  if (q.length < 2 || /[一-鿿]/.test(q) || /^\d+$/.test(q)) return []
+  if (!q) return []
 
   const key = q.toUpperCase()
   if (searchCache.has(key)) return searchCache.get(key)

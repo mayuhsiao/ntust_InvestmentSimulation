@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { searchStocks, searchUsStocks } from '../services/prices.js'
+import { searchStocks, searchRemote } from '../services/prices.js'
 import { price as fmtPrice } from '../lib/format.js'
 
-/** 股票代號／名稱搜尋下拉（台股本地清單 + 美股即時查詢，支援鍵盤上下選取） */
+/** 看起來像股票代號嗎？台股為數字（可帶英文後綴），美股為純英文 */
+const LOOKS_LIKE_CODE = /^(\d{4,6}[A-Z]?|[A-Z]{1,5}([.-][A-Z]{1,3})?)$/
+
+/** 股票代號／名稱搜尋下拉（本地清單 + 伺服器查詢雙保險，支援鍵盤上下選取） */
 export default function StockSearch({
   list = [],
   onSelect,
@@ -12,18 +15,28 @@ export default function StockSearch({
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const [cursor, setCursor] = useState(0)
-  const [usResults, setUsResults] = useState([])
+  const [remote, setRemote] = useState([])
+  const [searching, setSearching] = useState(false)
+  const [hint, setHint] = useState('')
   const boxRef = useRef(null)
 
-  const twMatches = useMemo(() => searchStocks(list, query, 10), [list, query])
+  const localMatches = useMemo(() => searchStocks(list, query, 10), [list, query])
 
-  // 美股需要打 API，延遲 250ms 避免每打一個字就查一次
+  // 伺服器查詢延遲 250ms，避免每打一個字就送一次
   useEffect(() => {
     const q = query.trim()
-    if (!q) return setUsResults([])
+    setHint('')
+    if (!q) {
+      setRemote([])
+      setSearching(false)
+      return
+    }
     let cancelled = false
+    setSearching(true)
     const timer = setTimeout(() => {
-      searchUsStocks(q).then((r) => !cancelled && setUsResults(r.slice(0, 6)))
+      searchRemote(q)
+        .then((r) => !cancelled && setRemote(r))
+        .finally(() => !cancelled && setSearching(false))
     }, 250)
     return () => {
       cancelled = true
@@ -32,9 +45,15 @@ export default function StockSearch({
   }, [query])
 
   const matches = useMemo(() => {
-    const seen = new Set(twMatches.map((s) => s.code))
-    return [...twMatches, ...usResults.filter((s) => !seen.has(s.code))]
-  }, [twMatches, usResults])
+    const seen = new Set()
+    const out = []
+    for (const s of [...localMatches, ...remote]) {
+      if (!s.code || seen.has(s.code)) continue
+      seen.add(s.code)
+      out.push(s)
+    }
+    return out.slice(0, 14)
+  }, [localMatches, remote])
 
   useEffect(() => {
     setCursor(0)
@@ -52,31 +71,47 @@ export default function StockSearch({
     if (!stock) return
     onSelect?.(stock)
     setQuery('')
+    setRemote([])
+    setHint('')
     setOpen(false)
   }
 
-  function onKeyDown(e) {
-    if (!open || !matches.length) {
-      if (e.key === 'Enter' && query.trim()) {
-        // 清單還沒載入時也允許直接用打字的代號送出
-        choose({ code: query.trim().toUpperCase(), name: '', market: '' })
-        e.preventDefault()
-      }
-      return
+  /**
+   * 送出：有結果就選第一筆。
+   * 沒有結果時只接受「看起來像代號」的輸入 ——
+   * 否則手機使用者打「台積電」再按鍵盤送出鍵，中文會被當成代號送出去查，
+   * 結果是一則看不懂的錯誤訊息。
+   */
+  function submit() {
+    const q = query.trim()
+    if (!q) return
+    if (matches.length) return choose(matches[Math.min(cursor, matches.length - 1)])
+    if (searching) return setHint('搜尋中，請稍候…')
+    if (LOOKS_LIKE_CODE.test(q.toUpperCase())) {
+      return choose({ code: q.toUpperCase(), name: '', market: '' })
     }
+    setHint('找不到這檔股票。請確認名稱或改輸入代號（例如台積電是 2330）。')
+  }
+
+  function onKeyDown(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      return submit()
+    }
+    if (!matches.length) return
     if (e.key === 'ArrowDown') {
       setCursor((c) => Math.min(c + 1, matches.length - 1))
+      setOpen(true)
       e.preventDefault()
     } else if (e.key === 'ArrowUp') {
       setCursor((c) => Math.max(c - 1, 0))
-      e.preventDefault()
-    } else if (e.key === 'Enter') {
-      choose(matches[cursor])
       e.preventDefault()
     } else if (e.key === 'Escape') {
       setOpen(false)
     }
   }
+
+  const showList = open && query.trim()
 
   return (
     <div className="combo" ref={boxRef}>
@@ -84,6 +119,11 @@ export default function StockSearch({
         value={query}
         autoFocus={autoFocus}
         placeholder={placeholder}
+        enterKeyHint="search"
+        autoComplete="off"
+        autoCorrect="off"
+        autoCapitalize="off"
+        spellCheck={false}
         onChange={(e) => {
           setQuery(e.target.value)
           setOpen(true)
@@ -91,11 +131,18 @@ export default function StockSearch({
         onFocus={() => setOpen(true)}
         onKeyDown={onKeyDown}
       />
-      {open && query.trim() && (
+
+      {hint && (
+        <div className="small" style={{ color: 'var(--warn)', marginTop: 6 }}>
+          {hint}
+        </div>
+      )}
+
+      {showList && (
         <div className="combo-list">
           {matches.length === 0 && (
             <div className="combo-item muted">
-              {list.length ? '查無相符的股票（美股請輸入英文代號或公司名）' : '代號清單載入中…（仍可直接輸入代號後按 Enter）'}
+              {searching ? '搜尋中…' : '查無相符的股票，請確認代號或名稱'}
             </div>
           )}
           {matches.map((s, i) => (
@@ -116,6 +163,9 @@ export default function StockSearch({
               </span>
             </div>
           ))}
+          {searching && matches.length > 0 && (
+            <div className="combo-item muted small">搜尋中…</div>
+          )}
         </div>
       )}
     </div>

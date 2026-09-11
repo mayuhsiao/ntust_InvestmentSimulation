@@ -407,7 +407,14 @@ export async function getDailyCloses({ code, start, end }) {
     }
   }
 
-  const e = new Error(`查無 ${resolved.code} 的收盤價：${errors.join('；')}`)
+  // 詳細原因留在伺服器日誌，畫面上只給使用者看得懂的說明
+  console.warn(`[報價] ${resolved.code} 取得失敗：${errors.join('；')}`)
+  const looksChinese = /[一-鿿]/.test(resolved.code)
+  const e = new Error(
+    looksChinese
+      ? `「${resolved.code}」不是股票代號。請在搜尋框輸入後，從下拉選單點選要交易的股票。`
+      : `查無代號 ${resolved.code} 的收盤價，請確認代號是否正確（台股為數字代號，美股為英文代號）。`,
+  )
   e.statusCode = 404
   throw e
 }
@@ -451,12 +458,58 @@ export async function getDailyClosesBatch({ codes, start, end }) {
 /* ------------------------------------------------------------------ */
 
 /**
- * 透過 Yahoo 搜尋美股代號。
- * 美股上市公司超過 6,000 家，沒必要像台股那樣整包下載，改成即時查詢。
+ * 代號搜尋：台股查伺服器端快取的全市場清單，美股即時問 Yahoo。
+ *
+ * 台股也在伺服器搜尋一次是刻意的 —— 手機或網路不佳時，
+ * 前端那份 12,000 筆的清單可能還沒下載完，
+ * 這時仍然要能用「台積電」這種中文名稱找到股票。
  */
 export async function searchGlobal(keyword) {
   const q = String(keyword || '').trim()
-  if (q.length < 1) return { query: q, results: [] }
+  if (!q) return { query: q, results: [] }
+
+  const [tw, us] = await Promise.all([searchTaiwan(q), searchYahoo(q)])
+  const seen = new Set()
+  const results = []
+  for (const row of [...tw, ...us]) {
+    if (seen.has(row.code)) continue
+    seen.add(row.code)
+    results.push(row)
+  }
+  return { query: q, results: results.slice(0, 16) }
+}
+
+/** 台股：代號完全相符 → 代號開頭相符 → 名稱包含 */
+async function searchTaiwan(q) {
+  let list = []
+  try {
+    list = (await loadUniverse()).list || []
+  } catch {
+    return []
+  }
+  const key = q.toUpperCase()
+  const exact = []
+  const byCode = []
+  const byName = []
+  for (const s of list) {
+    if (s.code === key) exact.push(s)
+    else if (s.code.startsWith(key)) byCode.push(s)
+    else if (s.name.includes(q)) byName.push(s)
+    if (exact.length + byCode.length + byName.length >= 30) break
+  }
+  return [...exact, ...byCode, ...byName].slice(0, 10).map((s) => ({
+    code: s.code,
+    name: s.name,
+    market: s.market,
+    exchange: s.market === 'TPEX' ? '上櫃' : '上市',
+    close: s.close,
+    type: 'EQUITY',
+  }))
+}
+
+/** 美股：中文查詢沒有意義，直接略過 */
+async function searchYahoo(q) {
+  if (/[一-鿿]/.test(q) || /^\d+$/.test(q)) return []
 
   const url =
     `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}` +
@@ -467,13 +520,13 @@ export async function searchGlobal(keyword) {
     const json = await getJson(url, { timeout: 12000 })
     quotes = json?.quotes || []
   } catch {
-    return { query: q, results: [] }
+    return []
   }
 
   const ALLOWED = new Set(['EQUITY', 'ETF', 'MUTUALFUND', 'INDEX'])
   const US_EXCHANGES = /NASDAQ|NYSE|NYSEArca|BATS|AMEX|NMS|NGM|PCX/i
 
-  const results = quotes
+  return quotes
     .filter((x) => x.symbol && ALLOWED.has(x.quoteType))
     // 只留美國本土掛牌，避免出現一堆維也納、多倫多的重複掛牌
     .filter((x) => US_EXCHANGES.test(String(x.exchDisp || x.exchange || '')))
@@ -484,8 +537,6 @@ export async function searchGlobal(keyword) {
       exchange: x.exchDisp || x.exchange || '',
       type: x.quoteType,
     }))
-
-  return { query: q, results }
 }
 
 export { todayInTaipei, marketClosedInTaipei }
