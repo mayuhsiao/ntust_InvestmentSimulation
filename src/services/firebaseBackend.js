@@ -24,15 +24,27 @@ const AUTH_ERRORS = {
   'auth/weak-password': '密碼至少 6 個字元',
   'auth/too-many-requests': '嘗試次數過多，請稍後再試',
   'auth/network-request-failed': '網路連線失敗，請檢查網路後再試',
-  'auth/operation-not-allowed': 'Firebase 尚未啟用「電子郵件/密碼」登入方式',
+  'auth/operation-not-allowed':
+    'Firebase 尚未啟用「電子郵件/密碼」登入方式。請到 Firebase 主控台 → Authentication → Sign-in method 啟用。',
+  // 專案根本還沒開過 Authentication 時會是這個錯誤
+  'auth/configuration-not-found':
+    'Firebase 專案尚未啟用 Authentication。請到 Firebase 主控台 → Authentication → 開始使用 → 選「電子郵件/密碼」並啟用，然後重新整理本頁。',
+  'auth/invalid-api-key': 'Firebase 設定有誤：API 金鑰不正確，請檢查環境變數 VITE_FIREBASE_API_KEY。',
+  'auth/api-key-not-valid': 'Firebase 設定有誤：API 金鑰不正確，請檢查環境變數 VITE_FIREBASE_API_KEY。',
+  'auth/admin-restricted-operation': 'Firebase 目前限制自行註冊，請到 Authentication → Settings 關閉限制。',
 }
 
 function friendly(err) {
   const code = err?.code || ''
   if (AUTH_ERRORS[code]) return new Error(AUTH_ERRORS[code])
   if (code === 'permission-denied') {
-    return new Error('權限不足：請確認 Firestore 安全性規則已部署，且你的學號在管理者名單中')
+    return new Error(
+      '權限不足：請確認 firestore.rules 已部署到 Firebase，且你的學號有列在規則的 adminIds() 名單中。',
+    )
   }
+  if (code === 'unavailable') return new Error('連不上 Firestore，請檢查網路連線後再試')
+  // 沒對應到的錯誤至少把代碼帶出來，方便查
+  if (code) return new Error(`${err.message || '操作失敗'}（${code}）`)
   return err instanceof Error ? err : new Error(String(err))
 }
 

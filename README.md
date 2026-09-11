@@ -57,6 +57,7 @@ npm run dev
 到 [Firebase 主控台](https://console.firebase.google.com/) 建立專案，然後：
 
 - **Authentication** → 開始使用 → 登入方式 → 啟用 **電子郵件/密碼**
+  （這一步沒做的話，啟用帳號時會看到 `auth/configuration-not-found`）
 - **Firestore Database** → 建立資料庫 → 選 **asia-east1（台灣）** → 正式版模式
 
 ### 2. 取得設定值
@@ -82,17 +83,26 @@ VITE_ADMIN_IDS=teacher
 
 ### 3. 部署安全性規則
 
-打開 `firestore.rules`，把裡面的 `adminIds()` 改成你的學號（**要大寫**，且要和 `VITE_ADMIN_IDS` 一致）：
+`firestore.rules` 裡的 `adminIds()` 決定誰是管理者（**要大寫**，且要和 `VITE_ADMIN_IDS` 一致）：
 
 ```javascript
 function adminIds() {
-  return ['TEACHER'];        // ← 改成你的學號
+  return ['TEACHER'];        // 要加其他老師就寫成 ['TEACHER', 'M11426900']
 }
 ```
 
-然後到 **Firestore Database → 規則**，把整份檔案貼上去按「發布」。
+部署方式二選一：
 
-> ⚠️ 這一步一定要做。沒做的話會出現「權限不足」，或是任何人都能改別人的資料。
+```bash
+# A. 用 Firebase CLI（專案裡已附 firebase.json 與 .firebaserc）
+npx firebase-tools login
+npx firebase-tools deploy --only firestore:rules
+```
+
+**B.** 或到 [Firestore Database → 規則](https://console.firebase.google.com/project/_/firestore/rules)，把 `firestore.rules` 整份貼上去按「發布」。
+
+> ⚠️ **這一步一定要做。** Firestore 預設的正式版規則會擋掉所有讀寫，沒部署的話網站完全不能用；
+> 如果你當初選的是「測試模式」，那就是反過來 —— 任何人都能改全班的資料。
 
 ### 4. 老師第一次登入
 
