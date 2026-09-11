@@ -1,18 +1,72 @@
 rules_version = '2';
 
 // ==================================================================
-// 台股投資模擬競賽 — Firestore 安全性規則
+// emrd 專案 Firestore 安全性規則（合併版）
+//
+//   messages/     → emrd-web 公告板（原有規則，原封不動保留）
+//   config/       ↘
+//   students/      ｜
+//   trades/        ｜ 台股投資模擬競賽
+//   prices/        ｜
+//   settlements/  ↗
 //
 // 部署方式（擇一）：
-//   A. Firebase 主控台 → Firestore Database → 規則 → 貼上後「發布」
-//   B. firebase deploy --only firestore:rules
+//   A. Firebase 主控台 → Firestore → (default) → 規則 → 貼上後「發布」
+//   B. npx firebase-tools deploy --only firestore:rules
 //
-// ⚠️ 下面 ADMIN_IDS 請改成你（老師）的學號，要與 .env 的
+// ⚠️ 下面 adminIds() 是老師（管理者）名單，要與 .env 的
 //    VITE_ADMIN_IDS 一致，否則管理頁面會出現「權限不足」。
 // ==================================================================
 
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    /* ================================================================
+     * 一、emrd-web 公告板
+     * ----------------------------------------------------------------
+     * 這段是既有規則，未做任何修改。
+     * 該應用程式沒有使用 Firebase Auth，所以維持免登入存取。
+     * ================================================================ */
+
+    match /messages/{msg} {
+      allow read: if true;
+      allow create: if
+        request.resource.data.keys().hasOnly(['name', 'text', 'pass', 'ts', 'img', 'cat', 'parent']) &&
+        request.resource.data.name is string &&
+        request.resource.data.name.size() >= 1 &&
+        request.resource.data.name.size() <= 20 &&
+        request.resource.data.text is string &&
+        request.resource.data.text.size() <= 500 &&
+        request.resource.data.pass == 'EMRD115' &&
+        request.resource.data.ts == request.time &&
+        (
+          (
+            !('parent' in request.resource.data) &&
+            'cat' in request.resource.data &&
+            request.resource.data.cat in ['公告', '學生事務', '課業/課表', '考試', '活動揪團', '閒聊'] &&
+            (request.resource.data.text.size() >= 1 || 'img' in request.resource.data) &&
+            (!('img' in request.resource.data) ||
+              (request.resource.data.img is string &&
+               request.resource.data.img.size() < 500 &&
+               request.resource.data.img.matches('https://res\\.cloudinary\\.com/wollurnv/.*')))
+          )
+          ||
+          (
+            'parent' in request.resource.data &&
+            request.resource.data.parent is string &&
+            request.resource.data.parent.size() >= 1 &&
+            request.resource.data.parent.size() <= 40 &&
+            !('cat' in request.resource.data) &&
+            !('img' in request.resource.data) &&
+            request.resource.data.text.size() >= 1
+          )
+        );
+      allow update, delete: if false;
+    }
+
+    /* ================================================================
+     * 二、台股投資模擬競賽
+     * ================================================================ */
 
     // ---------- 共用函式 ----------
 
@@ -25,7 +79,7 @@ service cloud.firestore {
       return request.auth.token.email.split('@')[0].upper();
     }
 
-    // 👇👇 請改成你的學號（可多筆）👇👇
+    // 👇👇 老師（管理者）的學號，可多筆 👇👇
     function adminIds() {
       return ['TEACHER'];
     }
@@ -110,7 +164,10 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    // 其他一律拒絕
+    /* ================================================================
+     * 三、其他一律拒絕
+     * ================================================================ */
+
     match /{document=**} {
       allow read, write: if false;
     }
