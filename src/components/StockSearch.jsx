@@ -1,15 +1,40 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { searchStocks } from '../services/prices.js'
+import { searchStocks, searchUsStocks } from '../services/prices.js'
 import { price as fmtPrice } from '../lib/format.js'
 
-/** 股票代號／名稱搜尋下拉（支援鍵盤上下選取） */
-export default function StockSearch({ list = [], onSelect, placeholder = '輸入代號或名稱，例如 2330 或 台積電', autoFocus }) {
+/** 股票代號／名稱搜尋下拉（台股本地清單 + 美股即時查詢，支援鍵盤上下選取） */
+export default function StockSearch({
+  list = [],
+  onSelect,
+  placeholder = '輸入代號或名稱，例如 2330、台積電、AAPL',
+  autoFocus,
+}) {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const [cursor, setCursor] = useState(0)
+  const [usResults, setUsResults] = useState([])
   const boxRef = useRef(null)
 
-  const matches = useMemo(() => searchStocks(list, query, 12), [list, query])
+  const twMatches = useMemo(() => searchStocks(list, query, 10), [list, query])
+
+  // 美股需要打 API，延遲 250ms 避免每打一個字就查一次
+  useEffect(() => {
+    const q = query.trim()
+    if (!q) return setUsResults([])
+    let cancelled = false
+    const timer = setTimeout(() => {
+      searchUsStocks(q).then((r) => !cancelled && setUsResults(r.slice(0, 6)))
+    }, 250)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [query])
+
+  const matches = useMemo(() => {
+    const seen = new Set(twMatches.map((s) => s.code))
+    return [...twMatches, ...usResults.filter((s) => !seen.has(s.code))]
+  }, [twMatches, usResults])
 
   useEffect(() => {
     setCursor(0)
@@ -70,7 +95,7 @@ export default function StockSearch({ list = [], onSelect, placeholder = '輸入
         <div className="combo-list">
           {matches.length === 0 && (
             <div className="combo-item muted">
-              {list.length ? '查無相符的股票' : '代號清單載入中…（仍可直接輸入代號後按 Enter）'}
+              {list.length ? '查無相符的股票（美股請輸入英文代號或公司名）' : '代號清單載入中…（仍可直接輸入代號後按 Enter）'}
             </div>
           )}
           {matches.map((s, i) => (
@@ -83,8 +108,12 @@ export default function StockSearch({ list = [], onSelect, placeholder = '輸入
             >
               <span className="code">{s.code}</span>
               <span className="nm">{s.name}</span>
-              <span className="badge">{s.market === 'TPEX' ? '上櫃' : '上市'}</span>
-              <span className="px">{s.close != null ? fmtPrice(s.close) : ''}</span>
+              <span className={`badge${s.market === 'US' ? ' brand' : ''}`}>
+                {s.market === 'US' ? '美股' : s.market === 'TPEX' ? '上櫃' : '上市'}
+              </span>
+              <span className="px">
+                {s.market === 'US' ? s.exchange || '' : s.close != null ? fmtPrice(s.close) : ''}
+              </span>
             </div>
           ))}
         </div>

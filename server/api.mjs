@@ -9,6 +9,7 @@ import {
   getStockList,
   getDailyCloses,
   getDailyClosesBatch,
+  searchGlobal,
   todayInTaipei,
   marketClosedInTaipei,
 } from './twstock.mjs'
@@ -47,6 +48,13 @@ export async function handleApi(pathname, params) {
         const data = await getStockList()
         // 全市場清單一天只變一次，讓 CDN 快取 30 分鐘
         return { status: 200, cache: 'public, max-age=600, s-maxage=1800', body: data }
+      }
+
+      case 'stock-search': {
+        const q = params.get('q')
+        if (!q) throw bad('請提供 q 參數')
+        const data = await searchGlobal(q)
+        return { status: 200, cache: 'public, max-age=3600, s-maxage=86400', body: data }
       }
 
       case 'stock-price': {

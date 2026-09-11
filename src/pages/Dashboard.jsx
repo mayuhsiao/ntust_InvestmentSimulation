@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { useApp } from '../context/AppContext.jsx'
-import { Card, Stat, Empty, MarketBadge } from '../components/ui.jsx'
+import { Card, Stat, Empty, MarketBadge, NativePrice } from '../components/ui.jsx'
 import LineChart from '../components/LineChart.jsx'
 import { money, pct, price, signedMoney, tone, lots, shortDate } from '../lib/format.js'
 import { sortTrades } from '../lib/portfolio.js'
@@ -179,7 +179,7 @@ export default function Dashboard({ onNavigate }) {
                   <th className="num">股數</th>
                   <th className="num">平均成本</th>
                   <th className="num">收盤價</th>
-                  <th className="num">市值</th>
+                  <th className="num">市值（台幣）</th>
                   <th className="num">未實現損益</th>
                   <th className="num">報酬率</th>
                   <th className="num">持股比重</th>
@@ -191,9 +191,15 @@ export default function Dashboard({ onNavigate }) {
                     <td>
                       <b className="tabular">{h.code}</b>　{h.name}　<MarketBadge market={h.market} />
                     </td>
-                    <td className="num">{lots(h.shares)}</td>
-                    <td className="num">{price(h.avgCost)}</td>
-                    <td className="num">{price(h.price)}</td>
+                    <td className="num">
+                      {h.currency === 'USD' ? `${h.shares.toLocaleString('zh-TW')} 股` : lots(h.shares)}
+                    </td>
+                    <td className="num">
+                      <NativePrice value={h.currency === 'USD' ? h.avgCostNative : h.avgCost} currency={h.currency} />
+                    </td>
+                    <td className="num">
+                      <NativePrice value={h.currency === 'USD' ? h.priceNative : h.price} currency={h.currency} />
+                    </td>
                     <td className="num">{money(h.marketValue)}</td>
                     <td className={`num ${tone(h.unrealized)}`}>{signedMoney(h.unrealized)}</td>
                     <td className={`num ${tone(h.unrealized)}`}>{pct(h.returnPct)}</td>

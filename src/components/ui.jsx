@@ -53,6 +53,13 @@ export function RankMedal({ rank }) {
 
 export function MarketBadge({ market }) {
   if (!market) return null
-  const map = { TWSE: '上市', TPEX: '上櫃', OTHER: '其他' }
-  return <span className="badge">{map[market] || market}</span>
+  const map = { TWSE: '上市', TPEX: '上櫃', US: '美股', FX: '匯率', OTHER: '其他' }
+  return <span className={`badge${market === 'US' ? ' brand' : ''}`}>{map[market] || market}</span>
+}
+
+/** 原幣價格：美股加上 $ 前綴，方便一眼分辨幣別 */
+export function NativePrice({ value, currency }) {
+  if (value == null || !Number.isFinite(Number(value))) return '—'
+  const n = new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 2 }).format(Number(value))
+  return currency === 'USD' ? `$${n}` : n
 }

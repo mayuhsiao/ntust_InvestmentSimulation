@@ -185,11 +185,19 @@ export async function getStockList() {
  * 把使用者輸入的代號轉成 Yahoo 代號。
  *   '2330'     -> { symbol: '2330.TW',  market: 'TWSE' }
  *   '6488'     -> { symbol: '6488.TWO', market: 'TPEX' }
+ *   'AAPL'     -> { symbol: 'AAPL',     market: 'US'   }
+ *   'TWD=X'    -> 原樣沿用（匯率）
  *   '7709.HK'  -> 原樣沿用（允許直接指定 Yahoo 代號）
  */
 export async function resolveSymbol(rawCode) {
   const code = String(rawCode || '').trim().toUpperCase()
   if (!code) throw new Error('缺少股票代號')
+  // 匯率與指數等特殊代號（TWD=X、^GSPC）
+  if (/[=^]/.test(code)) return { code, symbol: code, market: 'FX', name: '' }
+  // 台股代號一定含數字，純英文字母視為美股（BRK-B、BF.B 也支援）
+  if (!/\d/.test(code) && /^[A-Z]{1,5}([.-][A-Z]{1,3})?$/.test(code)) {
+    return { code, symbol: code, market: 'US', name: '' }
+  }
   if (code.includes('.')) return { code: code.split('.')[0], symbol: code, market: 'OTHER', name: '' }
 
   let entry = null
@@ -244,6 +252,12 @@ async function fetchYahoo(symbol, start, end) {
         closes,
         name: meta.longName || meta.shortName || '',
         currency: meta.currency || 'TWD',
+        exchangeTz: meta.exchangeTimezoneName || '',
+        gmtOffset: offset,
+        // 該交易所目前這一盤的起訖時間，用來判斷最後一筆是不是「還沒收盤」
+        session: meta.currentTradingPeriod?.regular
+          ? { start: Number(meta.currentTradingPeriod.regular.start), end: Number(meta.currentTradingPeriod.regular.end) }
+          : null,
         source: 'yahoo',
       }
     } catch (err) {
@@ -313,6 +327,43 @@ async function fetchTwseOfficial(stockNo, start, end) {
 /* 對外：取單一檔股票的日收盤價                                           */
 /* ------------------------------------------------------------------ */
 
+/** 收盤後還要等資料定案的緩衝（台股 13:30 收盤、約 14:00 定案） */
+const SETTLE_BUFFER_SEC = 30 * 60
+
+/**
+ * 把「該盤還沒收完」的那一筆從收盤價中移除，改放到 intraday。
+ *
+ * 以 Yahoo 回報的該交易所目前盤別（currentTradingPeriod.regular）判斷，
+ * 所以台股、美股、其他市場都適用，不必自己維護各地收盤時間。
+ * 取不到盤別資訊時（例如證交所備援來源）退回台股 14:00 的判斷。
+ *
+ * @returns {{date:string, price:number}|null} 被移除的那一筆
+ */
+function withholdUnsettledBar(closes, data) {
+  const nowSec = Math.floor(Date.now() / 1000)
+
+  if (data.session?.end) {
+    // 盤別尚未結束（含定案緩衝）→ 該盤當天的那一筆還不算數
+    if (nowSec < data.session.end + SETTLE_BUFFER_SEC) {
+      const sessionDay = epochToDay(data.session.start, data.gmtOffset || 0)
+      if (closes[sessionDay] != null) {
+        const price = closes[sessionDay]
+        delete closes[sessionDay]
+        return { date: sessionDay, price }
+      }
+    }
+    return null
+  }
+
+  const today = todayInTaipei()
+  if (closes[today] != null && !marketClosedInTaipei()) {
+    const price = closes[today]
+    delete closes[today]
+    return { date: today, price }
+  }
+  return null
+}
+
 export async function getDailyCloses({ code, start, end }) {
   const resolved = await resolveSymbol(code)
   const errors = []
@@ -333,13 +384,8 @@ export async function getDailyCloses({ code, start, end }) {
         if (d >= lower && d <= end) closes[d] = px
       }
 
-      // 尚未收盤的當日報價不列入收盤價，另外放在 intraday 供參考
-      const today = todayInTaipei()
-      let intraday = null
-      if (closes[today] != null && !marketClosedInTaipei()) {
-        intraday = { date: today, price: closes[today] }
-        delete closes[today]
-      }
+      // 尚未收盤的那一筆不列入收盤價，另外放在 intraday 供參考
+      const intraday = withholdUnsettledBar(closes, data)
 
       const dates = Object.keys(closes).sort()
       return {
@@ -347,10 +393,11 @@ export async function getDailyCloses({ code, start, end }) {
         symbol: resolved.symbol,
         market: resolved.market,
         name: resolved.name || data.name || '',
-        currency: data.currency,
+        currency: data.currency || 'TWD',
         source: data.source,
         closes,
         intraday,
+        marketOpen: Boolean(intraday),
         firstDate: dates[0] || null,
         lastDate: dates[dates.length - 1] || null,
         lastClose: dates.length ? closes[dates[dates.length - 1]] : null,
@@ -397,6 +444,48 @@ export async function getDailyClosesBatch({ codes, start, end }) {
     calendar: [...calendar].sort(),
     results,
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* 美股代號搜尋                                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 透過 Yahoo 搜尋美股代號。
+ * 美股上市公司超過 6,000 家，沒必要像台股那樣整包下載，改成即時查詢。
+ */
+export async function searchGlobal(keyword) {
+  const q = String(keyword || '').trim()
+  if (q.length < 1) return { query: q, results: [] }
+
+  const url =
+    `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}` +
+    '&quotesCount=12&newsCount=0&enableFuzzyQuery=false&quotesQueryId=tss_match_phrase_query'
+
+  let quotes = []
+  try {
+    const json = await getJson(url, { timeout: 12000 })
+    quotes = json?.quotes || []
+  } catch {
+    return { query: q, results: [] }
+  }
+
+  const ALLOWED = new Set(['EQUITY', 'ETF', 'MUTUALFUND', 'INDEX'])
+  const US_EXCHANGES = /NASDAQ|NYSE|NYSEArca|BATS|AMEX|NMS|NGM|PCX/i
+
+  const results = quotes
+    .filter((x) => x.symbol && ALLOWED.has(x.quoteType))
+    // 只留美國本土掛牌，避免出現一堆維也納、多倫多的重複掛牌
+    .filter((x) => US_EXCHANGES.test(String(x.exchDisp || x.exchange || '')))
+    .map((x) => ({
+      code: x.symbol,
+      name: x.shortname || x.longname || x.symbol,
+      market: 'US',
+      exchange: x.exchDisp || x.exchange || '',
+      type: x.quoteType,
+    }))
+
+  return { query: q, results }
 }
 
 export { todayInTaipei, marketClosedInTaipei }

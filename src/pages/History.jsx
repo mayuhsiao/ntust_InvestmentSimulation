@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useApp } from '../context/AppContext.jsx'
-import { Card, Empty } from '../components/ui.jsx'
+import { Card, Empty, NativePrice } from '../components/ui.jsx'
 import { downloadCSV } from '../lib/csv.js'
 import { sortTrades } from '../lib/portfolio.js'
 import { money, pct, price as fmtPrice, signedMoney, tone, lots, dateTime } from '../lib/format.js'
@@ -71,14 +71,16 @@ export default function History() {
   const nameOf = (id) => students.find((s) => s.studentId === id)?.name || ''
 
   function exportCSV() {
+    const marketLabel = { TWSE: '上市', TPEX: '上櫃', US: '美股' }
     const header = [
       '學號', '姓名', '日期', '買賣別', '代號', '股票名稱', '市場',
-      '成交價', '股數', '成交金額', '手續費', '證交稅', '淨額', '已實現損益', '備註', '建立時間',
+      '成交價', '幣別', '匯率', '股數', '成交金額(台幣)', '手續費', '證交稅', '淨額(台幣)', '已實現損益', '備註', '建立時間',
     ]
     const body = rows.map((t) => [
       t.studentId, nameOf(t.studentId), t.date, t.side === 'BUY' ? '買進' : '賣出',
-      t.code, t.name, t.market === 'TPEX' ? '上櫃' : '上市',
-      t.price, t.shares, Math.round(t.gross), t.fee, t.tax, Math.round(t.net),
+      t.code, t.name, marketLabel[t.market] || t.market || '上市',
+      t.price, t.currency || 'TWD', t.fxRate ?? 1,
+      t.shares, Math.round(t.gross), t.fee, t.tax, Math.round(t.net),
       t.realized == null ? '' : Math.round(t.realized), t.note || '', dateTime(t.createdAt),
     ])
     downloadCSV(`交易紀錄_${scope === 'me' ? authId : '全班'}_${new Date().toISOString().slice(0, 10)}`, [header, ...body])
@@ -181,8 +183,11 @@ export default function History() {
                     </td>
                     <td>
                       <b className="tabular">{t.code}</b>　{t.name}
+                      {t.currency === 'USD' && <span className="badge brand">美股</span>}
                     </td>
-                    <td className="num">{fmtPrice(t.price)}</td>
+                    <td className="num">
+                      <NativePrice value={t.price} currency={t.currency} />
+                    </td>
                     <td className="num">{lots(t.shares)}</td>
                     <td className="num">{money(t.gross)}</td>
                     <td className="num">{money(t.fee)}</td>

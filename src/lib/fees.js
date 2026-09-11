@@ -7,10 +7,14 @@
  */
 
 export const DEFAULT_FEES = {
-  feeRate: 0.001425, // 手續費率
+  feeRate: 0.001425, // 台股手續費率
   feeDiscount: 1, // 折扣（0.6 = 6 折）
   minFee: 20, // 最低手續費（元）
   taxRate: 0.003, // 證交稅率（賣出）
+
+  // 美股（以國內券商複委託的收費方式模擬）
+  usFeeRate: 0.005, // 手續費率 0.5%
+  usMinFee: 500, // 最低手續費（新台幣，約 15 美元）
 }
 
 function normalize(fees) {
@@ -42,6 +46,39 @@ export function sellProceeds(price, shares, fees) {
 
 export function settle(side, price, shares, fees) {
   return side === 'SELL' ? sellProceeds(price, shares, fees) : buyCost(price, shares, fees)
+}
+
+/**
+ * 通用結算：支援美股與匯率換算，回傳的金額一律是新台幣。
+ *
+ * @param {object} o
+ * @param {'BUY'|'SELL'} o.side
+ * @param {number} o.price   原幣成交價（美股為美元）
+ * @param {number} o.shares  股數
+ * @param {number} o.fxRate  匯率（台股為 1；美股為當日 USD/TWD）
+ * @param {'TW'|'US'} o.market
+ */
+export function settleTrade({ side, price, shares, fxRate = 1, market = 'TW', fees }) {
+  const f = normalize(fees)
+  const gross = round2(price * shares * fxRate)
+  if (gross <= 0) return { gross: 0, fee: 0, tax: 0, net: 0 }
+
+  let fee
+  let tax = 0
+  if (market === 'US') {
+    // 複委託：按成交金額計費，未達最低手續費以最低收取；美股無證交稅
+    fee = Math.max(Math.floor(gross * f.usFeeRate), Math.min(f.usMinFee, Math.floor(gross)))
+  } else {
+    fee = commission(gross, f)
+    if (side === 'SELL') tax = Math.floor(gross * f.taxRate)
+  }
+
+  return {
+    gross,
+    fee,
+    tax,
+    net: side === 'SELL' ? round2(gross - fee - tax) : round2(gross + fee),
+  }
 }
 
 function round2(n) {

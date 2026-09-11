@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useApp } from '../context/AppContext.jsx'
-import { Card, Empty, Field, MarketBadge } from '../components/ui.jsx'
+import { Card, Empty, Field, MarketBadge, NativePrice } from '../components/ui.jsx'
 import StockSearch from '../components/StockSearch.jsx'
 import LineChart from '../components/LineChart.jsx'
 import { fetchQuote } from '../services/prices.js'
-import { settle } from '../lib/fees.js'
+import { settleTrade } from '../lib/fees.js'
 import { money, pct, price as fmtPrice, signedMoney, tone, lots } from '../lib/format.js'
 
 export default function Trade() {
@@ -21,6 +21,7 @@ export default function Trade() {
     notify,
     notStarted,
     session,
+    lookup,
   } = useApp()
 
   const [stock, setStock] = useState(null)
@@ -30,6 +31,7 @@ export default function Trade() {
   const [side, setSide] = useState('BUY')
   const [lotInput, setLotInput] = useState('1')
   const [oddInput, setOddInput] = useState('0')
+  const [usShares, setUsShares] = useState('10')
   const [tradeDate, setTradeDate] = useState('')
   const [forStudent, setForStudent] = useState('')
   const [busy, setBusy] = useState(false)
@@ -66,13 +68,19 @@ export default function Trade() {
 
   const dates = useMemo(() => (quote?.closes ? Object.keys(quote.closes).sort() : []), [quote])
 
-  const execPrice = useMemo(() => {
+  /**
+   * 實際採用的收盤價與它的日期。
+   * 該日無報價時（停牌、或美股與台股交易日不同步）往前取最近一筆，
+   * 並如實顯示是哪一天的收盤價。
+   */
+  const execDate = useMemo(() => {
     if (!quote?.closes) return null
-    if (quote.closes[effectiveDate] != null) return quote.closes[effectiveDate]
-    // 該日無報價（停牌或尚未上市）→ 取之前最近的收盤價
+    if (quote.closes[effectiveDate] != null) return effectiveDate
     const before = dates.filter((d) => d <= effectiveDate)
-    return before.length ? quote.closes[before[before.length - 1]] : null
+    return before.length ? before[before.length - 1] : null
   }, [quote, effectiveDate, dates])
+
+  const execPrice = execDate ? quote.closes[execDate] : null
 
   const prevPrice = useMemo(() => {
     const before = dates.filter((d) => d < effectiveDate)
@@ -81,13 +89,25 @@ export default function Trade() {
 
   const change = execPrice != null && prevPrice != null ? execPrice - prevPrice : null
 
+  const isUS = (quote?.market || stock?.market) === 'US'
+  const currency = quote?.currency || (isUS ? 'USD' : 'TWD')
+  // 美股以美元計價，成交金額要用當日匯率換算成台幣
+  const fxRate = currency === 'TWD' ? 1 : lookup.fxAt(effectiveDate)
+  const execPriceTWD = execPrice != null && fxRate != null ? execPrice * fxRate : null
+
   const holding = snap.holdings.find((h) => h.code === stock?.code) || null
-  const shares = Math.max(0, (Number(lotInput) || 0) * 1000 + (Number(oddInput) || 0))
-  const estimate = execPrice != null && shares > 0 ? settle(side, execPrice, shares, config) : null
+  const shares = isUS
+    ? Math.max(0, Math.floor(Number(usShares) || 0))
+    : Math.max(0, (Number(lotInput) || 0) * 1000 + (Number(oddInput) || 0))
+
+  const estimate =
+    execPrice != null && fxRate != null && shares > 0
+      ? settleTrade({ side, price: execPrice, shares, fxRate, market: isUS ? 'US' : 'TW', fees: config })
+      : null
 
   const locked = config.lockTrading && !isAdmin
-  // 盤中禁止下單；老師不受限，方便上課示範與補單
-  const sessionBlocked = session.blocked && !isAdmin
+  // 台股盤中禁止下單；美股則看該檔自己的市場有沒有在交易（見下方 quote.marketOpen）
+  const sessionBlocked = session.blocked && !isAdmin && !isUS
   const outOfRange = effectiveDate < config.startDate || effectiveDate > config.endDate
 
   const problem = useMemo(() => {
@@ -96,10 +116,16 @@ export default function Trade() {
     if (sessionBlocked) {
       return `現在是${session.label}（${session.time}），本競賽以收盤價成交，盤中不開放下單。今天 ${session.reopenAt} 之後即可用今日收盤價交易。`
     }
-    if (!stock) return '請先在上方「選擇股票」搜尋並點選一檔股票（例如輸入 2330 後點台積電）'
+    if (!stock) return '請先在上方「選擇股票」搜尋並點選一檔股票（例如輸入 2330 後點台積電，或輸入 AAPL 買美股）'
     if (loadingQuote) return '報價載入中，請稍候…'
     if (quoteError) return `取得報價失敗：${quoteError}`
+    // 該檔股票所屬市場正在交易中 → 收盤價還沒定案，不能下單
+    if (quote?.marketOpen && !isAdmin) {
+      return `${stock.name || stock.code} 所屬市場正在交易中（盤中價 ${fmtPrice(quote.intraday?.price)}），` +
+        '本競賽以收盤價成交，請於該市場收盤後再下單。'
+    }
     if (execPrice == null) return '這檔股票在所選日期沒有收盤價，請換一天或換一檔'
+    if (fxRate == null) return '美元匯率尚未取得，請按右上角「↻ 更新」後再試'
     if (outOfRange) return `交易日需在競賽期間內（${config.startDate} ～ ${config.endDate}）`
     if (shares <= 0) return '請輸入交易股數'
     if (side === 'BUY' && estimate && estimate.net > snap.cash) {
@@ -111,8 +137,8 @@ export default function Trade() {
     }
     return null
   }, [
-    notStarted, locked, sessionBlocked, session, stock, loadingQuote, quoteError,
-    execPrice, outOfRange, shares, side, estimate, snap.cash, holding, config,
+    notStarted, locked, sessionBlocked, session, stock, loadingQuote, quoteError, quote,
+    isAdmin, execPrice, fxRate, outOfRange, shares, side, estimate, snap.cash, holding, config,
   ])
 
   // 還沒選股票只是「還沒開始」，不是錯誤，用中性樣式提示就好
@@ -130,8 +156,10 @@ export default function Trade() {
         name: stock.name || quote?.name || '',
         market: quote?.market || stock.market || '',
         shares,
-        price: execPrice,
-        gross: estimate.gross,
+        price: execPrice, // 原幣成交價
+        currency,
+        fxRate, // 當日匯率（台股為 1）
+        gross: estimate.gross, // 以下金額一律為新台幣
         fee: estimate.fee,
         tax: estimate.tax,
         net: estimate.net,
@@ -139,11 +167,13 @@ export default function Trade() {
         createdBy: authId,
       })
       notify(
-        `${side === 'BUY' ? '買進' : '賣出'} ${stock.code} ${stock.name} ${lots(shares)} @ ${fmtPrice(execPrice)} 已成交`,
+        `${side === 'BUY' ? '買進' : '賣出'} ${stock.code} ${stock.name} ` +
+          `${isUS ? `${shares.toLocaleString('zh-TW')} 股` : lots(shares)} @ ${currency === 'USD' ? '$' : ''}${fmtPrice(execPrice)} 已成交`,
         'success',
       )
       setLotInput('1')
       setOddInput('0')
+      setUsShares('10')
       setNote('')
     } catch (err) {
       notify(err.message || '下單失敗', 'error')
@@ -158,7 +188,7 @@ export default function Trade() {
   return (
     <div className="grid side">
       <div className="stack">
-        <Card title="選擇股票" sub="輸入代號或中文名稱，支援上市與上櫃全部股票、ETF">
+        <Card title="選擇股票" sub="台股上市櫃全部股票與 ETF，以及美股（輸入英文代號或公司名，例如 AAPL、nvidia）">
           <StockSearch list={stockList} onSelect={setStock} autoFocus />
 
           {stock && (
@@ -175,6 +205,7 @@ export default function Trade() {
                 ) : execPrice != null ? (
                   <div style={{ textAlign: 'right' }}>
                     <div className={`tabular ${tone(change)}`} style={{ fontSize: 26, fontWeight: 700, lineHeight: 1.1 }}>
+                      {currency === 'USD' ? '$' : ''}
                       {fmtPrice(execPrice)}
                     </div>
                     <div className={`small tabular ${tone(change)}`}>
@@ -188,7 +219,13 @@ export default function Trade() {
                 ) : null}
               </div>
               <div className="small muted" style={{ marginTop: 2 }}>
-                {effectiveDate} 收盤價
+                {execDate || effectiveDate} 收盤價
+                {execDate && execDate !== effectiveDate && '（該市場最近一個交易日）'}
+                {isUS && execPriceTWD != null && (
+                  <>
+                    　≈ 新台幣 <b>{money(execPriceTWD, 2)}</b> / 股（匯率 {fmtPrice(fxRate)}）
+                  </>
+                )}
                 {quote?.source ? `　資料來源：${quote.source === 'yahoo' ? 'Yahoo Finance' : '證交所'}` : ''}
               </div>
 
@@ -196,9 +233,12 @@ export default function Trade() {
 
               {quote?.intraday && (
                 <div className="notice warn" style={{ marginTop: 12 }}>
-                  今日（{quote.intraday.date}）尚未收盤，盤中參考價 <b>{fmtPrice(quote.intraday.price)}</b>。
-                  競賽一律以已確認的收盤價成交，所以這筆交易會用 <b>{effectiveDate}</b> 的收盤價{' '}
-                  <b>{fmtPrice(execPrice)}</b>；今天收盤後即可用今日收盤價下單。
+                  {quote.intraday.date} 這一盤尚未收盤，盤中參考價{' '}
+                  <b>
+                    {currency === 'USD' ? '$' : ''}
+                    {fmtPrice(quote.intraday.price)}
+                  </b>
+                  。競賽一律以已確認的收盤價成交，該市場收盤後才能用當日收盤價下單。
                 </div>
               )}
 
@@ -241,11 +281,17 @@ export default function Trade() {
                   {snap.holdings.map((h) => (
                     <tr key={h.code}>
                       <td>
-                        <b className="tabular">{h.code}</b>　{h.name}
+                        <b className="tabular">{h.code}</b>　{h.name}　<MarketBadge market={h.market} />
                       </td>
-                      <td className="num">{lots(h.shares)}</td>
-                      <td className="num">{fmtPrice(h.avgCost)}</td>
-                      <td className="num">{fmtPrice(h.price)}</td>
+                      <td className="num">
+                        {h.currency === 'USD' ? `${h.shares.toLocaleString('zh-TW')} 股` : lots(h.shares)}
+                      </td>
+                      <td className="num">
+                        <NativePrice value={h.currency === 'USD' ? h.avgCostNative : h.avgCost} currency={h.currency} />
+                      </td>
+                      <td className="num">
+                        <NativePrice value={h.currency === 'USD' ? h.priceNative : h.price} currency={h.currency} />
+                      </td>
                       <td className={`num ${tone(h.unrealized)}`}>
                         {signedMoney(h.unrealized)}　{pct(h.returnPct)}
                       </td>
@@ -311,47 +357,62 @@ export default function Trade() {
               </>
             )}
 
-            <div className="field-row">
-              <Field label="張數（1 張 = 1000 股）">
+            {isUS ? (
+              <Field label="股數" hint="美股以「股」為單位，沒有張的概念">
                 <input
                   type="number"
                   min="0"
-                  value={lotInput}
-                  onChange={(e) => setLotInput(e.target.value)}
+                  value={usShares}
+                  onChange={(e) => setUsShares(e.target.value)}
                   inputMode="numeric"
                 />
               </Field>
-              <Field label="零股">
-                <input
-                  type="number"
-                  min="0"
-                  max="999"
-                  value={oddInput}
-                  onChange={(e) => setOddInput(e.target.value)}
-                  inputMode="numeric"
-                />
-              </Field>
-            </div>
+            ) : (
+              <div className="field-row">
+                <Field label="張數（1 張 = 1000 股）">
+                  <input
+                    type="number"
+                    min="0"
+                    value={lotInput}
+                    onChange={(e) => setLotInput(e.target.value)}
+                    inputMode="numeric"
+                  />
+                </Field>
+                <Field label="零股">
+                  <input
+                    type="number"
+                    min="0"
+                    max="999"
+                    value={oddInput}
+                    onChange={(e) => setOddInput(e.target.value)}
+                    inputMode="numeric"
+                  />
+                </Field>
+              </div>
+            )}
 
             <div className="row tight">
-              {[1, 5, 10].map((n) => (
+              {(isUS ? [10, 50, 100] : [1, 5, 10]).map((n) => (
                 <button
                   key={n}
                   className="tiny"
                   onClick={() => {
+                    if (isUS) return setUsShares(String(n))
                     setLotInput(String(n))
                     setOddInput('0')
                   }}
                 >
-                  {n} 張
+                  {n} {isUS ? '股' : '張'}
                 </button>
               ))}
-              {side === 'BUY' && execPrice != null && (
+              {side === 'BUY' && execPriceTWD != null && execPriceTWD > 0 && (
                 <button
                   className="tiny"
                   onClick={() => {
-                    // 1.002 預留手續費；買不滿一張時自動改買零股
-                    const max = Math.max(0, Math.floor(snap.cash / (execPrice * 1.002)))
+                    // 預留手續費；台股買不滿一張時自動改買零股
+                    const buffer = isUS ? 1 + config.usFeeRate : 1.002
+                    const max = Math.max(0, Math.floor(snap.cash / (execPriceTWD * buffer)))
+                    if (isUS) return setUsShares(String(max))
                     setLotInput(String(Math.floor(max / 1000)))
                     setOddInput(String(max % 1000))
                   }}
@@ -363,6 +424,7 @@ export default function Trade() {
                 <button
                   className="tiny"
                   onClick={() => {
+                    if (isUS) return setUsShares(String(holding.shares))
                     setLotInput(String(Math.floor(holding.shares / 1000)))
                     setOddInput(String(holding.shares % 1000))
                   }}
@@ -380,18 +442,29 @@ export default function Trade() {
               <div className="kv">
                 <span>成交價 × 股數</span>
                 <b>
-                  {execPrice != null ? fmtPrice(execPrice) : '—'} × {shares.toLocaleString('zh-TW')}
+                  {execPrice != null ? `${currency === 'USD' ? '$' : ''}${fmtPrice(execPrice)}` : '—'} ×{' '}
+                  {shares.toLocaleString('zh-TW')}
                 </b>
               </div>
+              {isUS && (
+                <div className="kv">
+                  <span>匯率（USD/TWD）</span>
+                  <b>{fxRate != null ? fmtPrice(fxRate) : '—'}</b>
+                </div>
+              )}
               <div className="kv">
-                <span>成交金額</span>
+                <span>成交金額{isUS ? '（台幣）' : ''}</span>
                 <b>{estimate ? money(estimate.gross) : '—'}</b>
               </div>
               <div className="kv">
-                <span>手續費（{(config.feeRate * 100).toFixed(4)}% × {config.feeDiscount} 折扣）</span>
+                <span>
+                  {isUS
+                    ? `手續費（複委託 ${(config.usFeeRate * 100).toFixed(2)}%，最低 ${config.usMinFee} 元）`
+                    : `手續費（${(config.feeRate * 100).toFixed(4)}% × ${config.feeDiscount} 折扣）`}
+                </span>
                 <b>{estimate ? money(estimate.fee) : '—'}</b>
               </div>
-              {side === 'SELL' && (
+              {side === 'SELL' && !isUS && (
                 <div className="kv">
                   <span>證交稅（{(config.taxRate * 100).toFixed(2)}%）</span>
                   <b>{estimate ? money(estimate.tax) : '—'}</b>
@@ -448,14 +521,17 @@ export default function Trade() {
           <br />
           • 一律以 <b>{effectiveDate}</b> 的收盤價成交，不可指定價格
           <br />
-          • <b>盤中（平日 09:00–14:00）不開放下單</b>，收盤後才能交易
+          • <b>該股票所屬市場開盤期間不開放下單</b>（台股平日 09:00–14:00、美股台灣時間深夜至凌晨）
           <br />
           • 六日與休市日全天開放，以最近一個交易日的收盤價成交
           <br />
-          • 手續費 {(config.feeRate * 100).toFixed(4)}%（最低 {config.minFee} 元），賣出另收證交稅{' '}
+          • 台股手續費 {(config.feeRate * 100).toFixed(4)}%（最低 {config.minFee} 元），賣出另收證交稅{' '}
           {(config.taxRate * 100).toFixed(2)}%
           <br />
-          • 可買零股，賣出不得超過持股，買進不得超過現金
+          • 美股以複委託計費 {(config.usFeeRate * 100).toFixed(2)}%（最低 {config.usMinFee} 元），無證交稅；
+          金額以當日 USD/TWD 匯率換算成台幣
+          <br />
+          • 台股可買零股、美股以股為單位；賣出不得超過持股，買進不得超過現金
         </div>
       </div>
     </div>

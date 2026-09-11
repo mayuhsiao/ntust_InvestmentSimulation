@@ -531,6 +531,8 @@ function ConfigPanel() {
         feeDiscount: Number(draft.feeDiscount),
         minFee: Number(draft.minFee),
         taxRate: Number(draft.taxRate),
+        usFeeRate: Number(draft.usFeeRate),
+        usMinFee: Number(draft.usMinFee),
         lockTrading: Boolean(draft.lockTrading),
         tradingWindow: draft.tradingWindow || 'afterClose',
       })
@@ -611,6 +613,15 @@ function ConfigPanel() {
           </Field>
           <Field label="證交稅率（賣出）" hint="0.003 = 0.3%，ETF 為 0.001">
             <input type="number" step="0.0005" value={draft.taxRate} onChange={set('taxRate')} />
+          </Field>
+        </div>
+
+        <div className="field-row">
+          <Field label="美股手續費率" hint="模擬複委託，0.005 = 0.5%；美股不收證交稅">
+            <input type="number" step="0.001" value={draft.usFeeRate} onChange={set('usFeeRate')} />
+          </Field>
+          <Field label="美股最低手續費（台幣）" hint="約等於一般複委託的最低 15～35 美元">
+            <input type="number" step="50" value={draft.usMinFee} onChange={set('usMinFee')} />
           </Field>
         </div>
 

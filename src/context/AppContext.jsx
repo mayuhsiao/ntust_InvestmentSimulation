@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { backend } from '../services/backend.js'
 import { DEFAULT_CONFIG } from '../services/defaults.js'
 import { loadStockList, fetchCloses } from '../services/prices.js'
-import { makePriceLookup, buildCalendar, rankAll, rankGroups, snapshot, navSeries } from '../lib/portfolio.js'
+import { makePriceLookup, buildCalendar, rankAll, rankGroups, snapshot, navSeries, FX_CODE } from '../lib/portfolio.js'
 import { marketSession } from '../lib/market.js'
 import { isAdminId } from '../firebase.js'
 
@@ -158,7 +158,8 @@ export function AppProvider({ children }) {
       const cache = priceCache || pricesRef.current
 
       const up = (c) => String(c).trim().toUpperCase()
-      const codes = new Set([up(conf.benchmark || '0050'), ...extraCodes.map(up)])
+      // 匯率一定要抓：美股持股要靠它換算成台幣計價
+      const codes = new Set([FX_CODE, up(conf.benchmark || '0050'), ...extraCodes.map(up)])
       for (const t of list) if (t.code) codes.add(up(t.code))
 
       const start = conf.startDate
@@ -197,6 +198,7 @@ export function AppProvider({ children }) {
             code,
             name: data.name || '',
             market: data.market || '',
+            currency: data.currency || 'TWD',
             closes: data.closes,
             from: start,
             to: end,
@@ -219,6 +221,7 @@ export function AppProvider({ children }) {
                 ...data,
                 name: data.name || old?.name || '',
                 market: data.market || old?.market || '',
+                currency: data.currency || old?.currency || 'TWD',
                 closes,
                 from: old?.from && old.from < data.from ? old.from : data.from,
                 to: old?.to && old.to > data.to ? old.to : data.to,

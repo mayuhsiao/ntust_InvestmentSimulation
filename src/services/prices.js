@@ -90,6 +90,32 @@ export function findStock(list, code) {
   return list.find((s) => s.code === c) || null
 }
 
+/* ---------------- 美股搜尋 ---------------- */
+
+const searchCache = new Map()
+
+/**
+ * 美股代號即時搜尋（美股有 6,000 多檔，不像台股整包下載）。
+ * 只有輸入看起來像英文代號或公司名時才會查。
+ */
+export async function searchUsStocks(keyword) {
+  const q = String(keyword || '').trim()
+  // 中文、純數字（台股代號）就不用查美股了
+  if (q.length < 2 || /[一-鿿]/.test(q) || /^\d+$/.test(q)) return []
+
+  const key = q.toUpperCase()
+  if (searchCache.has(key)) return searchCache.get(key)
+
+  try {
+    const body = await getJson(`${API}/stock-search?q=${encodeURIComponent(q)}`)
+    const results = body.results || []
+    searchCache.set(key, results)
+    return results
+  } catch {
+    return []
+  }
+}
+
 /* ---------------- 日收盤價 ---------------- */
 
 /**

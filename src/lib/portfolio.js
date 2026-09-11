@@ -41,21 +41,35 @@ export function replay(trades, initialCapital) {
     const shares = Number(t.shares) || 0
     if (shares <= 0) continue
     const key = t.code
-    const p = positions.get(key) || { code: key, name: t.name || '', market: t.market || '', shares: 0, cost: 0 }
+    const p = positions.get(key) || {
+      code: key,
+      name: t.name || '',
+      market: t.market || '',
+      currency: t.currency || 'TWD',
+      shares: 0,
+      cost: 0, // 台幣成本（含手續費）
+      costNative: 0, // 原幣成本（不含手續費），用來算每股平均成本
+    }
     if (!p.name && t.name) p.name = t.name
+    if (t.currency) p.currency = t.currency
+
+    const nativePrice = Number(t.price) || 0
 
     if (t.side === 'SELL') {
       const sellable = Math.min(shares, p.shares)
       const avg = p.shares > 0 ? p.cost / p.shares : 0
+      const avgNative = p.shares > 0 ? p.costNative / p.shares : 0
       const costOut = avg * sellable
       cash += Number(t.net) || 0
       realized += (Number(t.net) || 0) - costOut
       p.shares = Math.max(0, p.shares - shares)
       p.cost = p.shares === 0 ? 0 : Math.max(0, p.cost - costOut)
+      p.costNative = p.shares === 0 ? 0 : Math.max(0, p.costNative - avgNative * sellable)
     } else {
       cash -= Number(t.net) || 0
       p.shares += shares
       p.cost += Number(t.net) || 0
+      p.costNative += nativePrice * shares
     }
 
     feesPaid += Number(t.fee) || 0
@@ -67,9 +81,16 @@ export function replay(trades, initialCapital) {
   return { cash, positions, realized, feesPaid, taxPaid, turnover }
 }
 
+/** 美元兌台幣匯率在報價快取中的代號 */
+export const FX_CODE = 'TWD=X'
+
 /**
  * 收盤價查詢器：取「小於等於指定日期」的最近一筆收盤價，
  * 這樣遇到停牌或該股尚未有當日報價時仍能合理估值。
+ *
+ * at() 一律回傳「新台幣」價格：美股會自動乘上當日匯率，
+ * 讓上層的淨值、損益、排名全部維持單一幣別。
+ * 需要原幣價格時用 nativeAt()。
  */
 export function makePriceLookup(priceMap) {
   const sortedDates = new Map()
@@ -82,10 +103,38 @@ export function makePriceLookup(priceMap) {
     return sortedDates.get(code)
   }
 
+  /** 原幣收盤價（往前找最近一個有報價的日子） */
+  function nativeAt(code, date) {
+    const entry = priceMap?.[code]
+    if (!entry) return null
+    const closes = entry.closes || {}
+    if (closes[date] != null) return closes[date]
+    const dates = datesOf(code)
+    let lo = 0
+    let hi = dates.length - 1
+    let best = null
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1
+      if (dates[mid] <= date) {
+        best = dates[mid]
+        lo = mid + 1
+      } else {
+        hi = mid - 1
+      }
+    }
+    return best ? closes[best] : null
+  }
+
+  const currencyOf = (code) => priceMap?.[code]?.currency || 'TWD'
+  const fxAt = (date) => nativeAt(FX_CODE, date)
+
   return {
     has: (code) => Boolean(priceMap?.[code]),
     name: (code) => priceMap?.[code]?.name || '',
     market: (code) => priceMap?.[code]?.market || '',
+    currency: currencyOf,
+    nativeAt,
+    fxAt,
     latest(code) {
       const d = datesOf(code)
       return d.length ? priceMap[code].closes[d[d.length - 1]] : null
@@ -94,26 +143,13 @@ export function makePriceLookup(priceMap) {
       const d = datesOf(code)
       return d.length ? d[d.length - 1] : null
     },
-    /** 指定日期的收盤價（找不到則往前找最近一個交易日） */
+    /** 指定日期的收盤價，換算為新台幣 */
     at(code, date) {
-      const entry = priceMap?.[code]
-      if (!entry) return null
-      const closes = entry.closes || {}
-      if (closes[date] != null) return closes[date]
-      const dates = datesOf(code)
-      let lo = 0
-      let hi = dates.length - 1
-      let best = null
-      while (lo <= hi) {
-        const mid = (lo + hi) >> 1
-        if (dates[mid] <= date) {
-          best = dates[mid]
-          lo = mid + 1
-        } else {
-          hi = mid - 1
-        }
-      }
-      return best ? closes[best] : null
+      const px = nativeAt(code, date)
+      if (px == null) return null
+      if (currencyOf(code) === 'TWD') return px
+      const fx = fxAt(date)
+      return fx != null ? px * fx : null
     },
   }
 }
@@ -126,16 +162,21 @@ export function snapshot(trades, lookup, asOf, initialCapital) {
   const holdings = []
   for (const p of state.positions.values()) {
     if (p.shares <= 0) continue
-    const close = lookup.at(p.code, asOf)
+    const close = lookup.at(p.code, asOf) // 已換算成台幣
     const avgCost = p.cost / p.shares
+    const currency = p.currency || lookup.currency(p.code) || 'TWD'
     // 尚未有報價時暫以成本計價，避免資產憑空消失
     const marketValue = close != null ? close * p.shares : p.cost
     holdings.push({
       code: p.code,
       name: p.name || lookup.name(p.code) || p.code,
       market: p.market || lookup.market(p.code),
+      currency,
       shares: p.shares,
       avgCost,
+      // 原幣：讓同學看到「AAPL 平均成本 320 美元」而不是換算後的台幣數字
+      avgCostNative: p.shares > 0 ? p.costNative / p.shares : 0,
+      priceNative: lookup.nativeAt(p.code, asOf),
       cost: p.cost,
       price: close,
       priceDate: close != null ? asOf : null,
