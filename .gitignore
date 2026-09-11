@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.netlify/
+.vite/
+
+# 環境變數（含 Firebase 金鑰）— 絕對不要進版控
+.env
+.env.local
+.env.*.local
+
+# 編輯器與系統
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+npm-debug.log*

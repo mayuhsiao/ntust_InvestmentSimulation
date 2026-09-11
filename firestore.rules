@@ -1,0 +1,118 @@
+rules_version = '2';
+
+// ==================================================================
+// 台股投資模擬競賽 — Firestore 安全性規則
+//
+// 部署方式（擇一）：
+//   A. Firebase 主控台 → Firestore Database → 規則 → 貼上後「發布」
+//   B. firebase deploy --only firestore:rules
+//
+// ⚠️ 下面 ADMIN_IDS 請改成你（老師）的學號，要與 .env 的
+//    VITE_ADMIN_IDS 一致，否則管理頁面會出現「權限不足」。
+// ==================================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- 共用函式 ----------
+
+    function signedIn() {
+      return request.auth != null && request.auth.token.email != null;
+    }
+
+    // 由登入信箱推回學號：m11426913@ntust-invest.local → M11426913
+    function myId() {
+      return request.auth.token.email.split('@')[0].upper();
+    }
+
+    // 👇👇 請改成你的學號（可多筆）👇👇
+    function adminIds() {
+      return ['TEACHER'];
+    }
+
+    function isAdmin() {
+      return signedIn() && (
+        myId() in adminIds() ||
+        (
+          exists(/databases/$(database)/documents/students/$(myId())) &&
+          get(/databases/$(database)/documents/students/$(myId())).data.role == 'admin'
+        )
+      );
+    }
+
+    function changedKeys() {
+      return request.resource.data.diff(resource.data).affectedKeys();
+    }
+
+    // ---------- 競賽設定 ----------
+    // 所有登入者可讀，只有老師能改
+    match /config/{docId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    // ---------- 學生名單 ----------
+    match /students/{studentId} {
+      // 排行榜需要看到全班姓名與組別
+      allow read: if signedIn();
+
+      // 老師可以新增／修改／刪除任何人
+      allow write: if isAdmin();
+
+      // 老師本人第一次啟用帳號時，允許建立自己的資料
+      allow create: if signedIn()
+                    && studentId == myId()
+                    && myId() in adminIds();
+
+      // 學生「首次啟用帳號」：只能認領自己的學號，且只能寫這幾個欄位
+      allow update: if signedIn()
+                    && studentId == myId()
+                    && changedKeys().hasOnly(['uid', 'activated', 'activatedAt', 'name', 'group', 'role'])
+                    && request.resource.data.uid == request.auth.uid
+                    && request.resource.data.role == resource.data.get('role', 'student');
+    }
+
+    // ---------- 交易紀錄 ----------
+    match /trades/{tradeId} {
+      // 全班可讀（排行榜與持股比較需要）
+      allow read: if signedIn();
+
+      // 只能用自己的學號下單；老師可代任何學生下單
+      allow create: if signedIn()
+                    && (isAdmin() || request.resource.data.studentId == myId())
+                    && request.resource.data.shares is number
+                    && request.resource.data.shares > 0
+                    && request.resource.data.price is number
+                    && request.resource.data.price > 0
+                    && request.resource.data.side in ['BUY', 'SELL'];
+
+      // 成交後 30 分鐘內可自行撤銷（打錯股數的補救），老師不受限
+      allow delete: if isAdmin() || (
+                      signedIn() &&
+                      resource.data.studentId == myId() &&
+                      request.time < resource.data.createdAt + duration.value(30, 'm')
+                    );
+
+      // 交易紀錄不可竄改
+      allow update: if isAdmin();
+    }
+
+    // ---------- 收盤價快取 ----------
+    // 任何登入者都可以回填快取，加速其他同學載入
+    match /prices/{code} {
+      allow read: if signedIn();
+      allow write: if signedIn();
+    }
+
+    // ---------- 每日結算 ----------
+    match /settlements/{date} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    // 其他一律拒絕
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
