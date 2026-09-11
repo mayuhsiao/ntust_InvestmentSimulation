@@ -1,15 +1,17 @@
 import { useState } from 'react'
 import { useApp } from '../context/AppContext.jsx'
+import NtustLogo from '../components/NtustLogo.jsx'
 import { money } from '../lib/format.js'
 import { DEFAULT_CONFIG } from '../services/defaults.js'
 
 export default function Login() {
   const { signIn, activate, mode } = useApp()
   const [tab, setTab] = useState('signin')
-  const [form, setForm] = useState({ studentId: '', password: '', confirm: '', name: '', group: '' })
+  const [form, setForm] = useState({ studentId: '', password: '', confirm: '', name: '', group: '', joinCode: '' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
+  const classSite = DEFAULT_CONFIG.classSiteUrl
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }))
 
   async function submit(e) {
@@ -24,7 +26,11 @@ export default function Login() {
       if (tab === 'signin') {
         await signIn(form.studentId, form.password)
       } else {
-        await activate(form.studentId, form.password, { name: form.name.trim(), group: form.group.trim() })
+        await activate(form.studentId, form.password, {
+          name: form.name.trim(),
+          group: form.group.trim(),
+          joinCode: form.joinCode.trim(),
+        })
       }
     } catch (err) {
       setError(err.message || '操作失敗')
@@ -36,12 +42,16 @@ export default function Login() {
   return (
     <div className="login-page">
       <aside className="login-hero">
-        <div className="logo" style={{ color: '#fff' }}>
-          <span className="logo-mark" style={{ background: 'rgba(255,255,255,.18)' }}>📈</span>
-          <span>
-            國立臺灣科技大學
-            <small style={{ color: 'rgba(255,255,255,.7)' }}>理財工具實務與應用</small>
-          </span>
+        <div className="hero-watermark">
+          <NtustLogo size={430} variant="seal" tone="mono" color="#fff" />
+        </div>
+
+        <div className="hero-brand">
+          <NtustLogo size={54} variant="seal" tone="mono" color="#fff" />
+          <div>
+            <b>國立臺灣科技大學</b>
+            <span>理財工具實務與應用</span>
+          </div>
         </div>
 
         <h1>
@@ -77,13 +87,22 @@ export default function Login() {
             </div>
           </div>
         </div>
+
+        {classSite && (
+          <div style={{ fontSize: 13, opacity: 0.9 }}>
+            班級網站：
+            <a className="hero-link" href={classSite} target="_blank" rel="noopener noreferrer">
+              {classSite.replace(/^https?:\/\//, '')} ↗
+            </a>
+          </div>
+        )}
       </aside>
 
       <main className="login-panel">
         <form className="login-form" onSubmit={submit}>
-          <h2>{tab === 'signin' ? '登入' : '首次啟用帳號'}</h2>
+          <h2>{tab === 'signin' ? '登入' : '註冊新帳號'}</h2>
           <div className="sub">
-            {tab === 'signin' ? '使用學號與密碼登入' : '老師匯入名單後，第一次使用請在此設定自己的密碼'}
+            {tab === 'signin' ? '使用學號與密碼登入' : '輸入老師公布的註冊認證碼，即可自行建立帳號'}
           </div>
 
           <div className="seg">
@@ -91,7 +110,7 @@ export default function Login() {
               登入
             </button>
             <button type="button" className={tab === 'activate' ? 'active' : ''} onClick={() => setTab('activate')}>
-              首次啟用帳號
+              註冊新帳號
             </button>
           </div>
 
@@ -107,6 +126,21 @@ export default function Login() {
                 autoFocus
               />
             </div>
+
+            {tab === 'activate' && (
+              <div>
+                <label>註冊認證碼</label>
+                <input
+                  value={form.joinCode}
+                  onChange={set('joinCode')}
+                  placeholder="老師課堂上公布的認證碼"
+                  autoComplete="off"
+                />
+                <div className="small muted" style={{ marginTop: 4 }}>
+                  老師已經匯入你的學號時可以留空
+                </div>
+              </div>
+            )}
 
             <div>
               <label>密碼</label>
@@ -127,8 +161,8 @@ export default function Login() {
                 </div>
                 <div className="field-row">
                   <div>
-                    <label>姓名（選填）</label>
-                    <input value={form.name} onChange={set('name')} placeholder="沿用名單資料可留空" />
+                    <label>姓名</label>
+                    <input value={form.name} onChange={set('name')} placeholder="王小明" />
                   </div>
                   <div>
                     <label>組別（選填）</label>
@@ -141,7 +175,7 @@ export default function Login() {
             {error && <div className="notice error">{error}</div>}
 
             <button className="primary" type="submit" disabled={busy} style={{ width: '100%', padding: 11 }}>
-              {busy ? <span className="loader" /> : tab === 'signin' ? '登入' : '啟用並登入'}
+              {busy ? <span className="loader" /> : tab === 'signin' ? '登入' : '註冊並登入'}
             </button>
           </div>
 
@@ -150,16 +184,24 @@ export default function Login() {
               <>
                 <b>目前為本機示範模式</b>
                 <br />
-                尚未設定 Firebase，資料暫存在這台電腦的瀏覽器中。第一個啟用的帳號會自動成為老師（管理者）。
+                尚未設定 Firebase，資料暫存在這台電腦的瀏覽器中。第一個註冊的帳號會自動成為老師（管理者）。
               </>
             ) : (
               <>
-                <b>雲端模式（Firebase）</b>
+                <b>忘記密碼？</b>
                 <br />
-                忘記密碼請聯絡授課老師重設。
+                請聯絡授課老師協助重設。
               </>
             )}
           </div>
+
+          {classSite && (
+            <div className="small muted" style={{ marginTop: 14, textAlign: 'center' }}>
+              <a href={classSite} target="_blank" rel="noopener noreferrer">
+                前往班級網站 ↗
+              </a>
+            </div>
+          )}
         </form>
       </main>
     </div>

@@ -97,10 +97,14 @@ export function createFirebaseBackend() {
     },
 
     /**
-     * 首次啟用：先建立 Auth 帳號，再確認學號有沒有在老師匯入的名單裡。
-     * 不在名單中就把剛建立的帳號刪掉，避免留下孤兒帳號。
+     * 註冊 / 首次啟用
+     * ------------------------------------------------------------
+     * 先建立 Auth 帳號（之後才有權限讀 Firestore），再分兩種情況：
+     *   a) 學號已在老師匯入的名單中 → 直接認領，不需要認證碼
+     *   b) 學號不在名單中           → 需要老師公布的註冊認證碼
+     * 任何一步失敗都會把剛建立的 Auth 帳號刪掉，避免留下孤兒帳號。
      */
-    async activate(studentId, password, { name, group } = {}) {
+    async activate(studentId, password, { name, group, joinCode } = {}) {
       const { auth, db, fbAuth, fs } = await getFirebase()
       const id = normalizeId(studentId)
       if (!id) throw new Error('請輸入學號')
@@ -119,24 +123,47 @@ export function createFirebaseBackend() {
         const admin = isAdminId(id)
 
         if (!snap.exists()) {
-          if (!admin) {
-            throw new Error('名單中查無此學號，請聯絡老師確認名單是否已匯入')
+          if (admin) {
+            await fs.setDoc(
+              ref,
+              clean(
+                makeStudent({
+                  studentId: id,
+                  name: name || id,
+                  group: group || '',
+                  role: 'admin',
+                  activated: true,
+                  uid: credential.user.uid,
+                  activatedAt: fs.serverTimestamp(),
+                  createdAt: fs.serverTimestamp(),
+                }),
+              ),
+            )
+          } else {
+            if (!joinCode) {
+              throw new Error('名單中查無此學號。若要自行註冊，請輸入老師公布的註冊認證碼。')
+            }
+            if (!name) throw new Error('請輸入姓名')
+            // joinCode 會存進文件中，讓 firestore.rules 比對 config/secret 的認證碼。
+            // 只有同班同學（名單成員）讀得到，而他們本來就知道這組認證碼。
+            await fs.setDoc(
+              ref,
+              clean(
+                makeStudent({
+                  studentId: id,
+                  name,
+                  group: group || '',
+                  role: 'student',
+                  activated: true,
+                  uid: credential.user.uid,
+                  joinCode,
+                  selfRegistered: true,
+                  activatedAt: fs.serverTimestamp(),
+                  createdAt: fs.serverTimestamp(),
+                }),
+              ),
+            )
           }
-          await fs.setDoc(
-            ref,
-            clean(
-              makeStudent({
-                studentId: id,
-                name: name || id,
-                group: group || '',
-                role: 'admin',
-                activated: true,
-                uid: credential.user.uid,
-                activatedAt: fs.serverTimestamp(),
-                createdAt: fs.serverTimestamp(),
-              }),
-            ),
-          )
         } else {
           await fs.updateDoc(
             ref,
@@ -206,6 +233,29 @@ export function createFirebaseBackend() {
       const ref = fs.doc(db, COLLECTIONS.config, CONFIG_DOC)
       await fs.setDoc(ref, clean({ ...patch, updatedAt: fs.serverTimestamp() }), { merge: true })
       return this.loadConfig()
+    },
+
+    /**
+     * 註冊認證碼放在 config/secret，安全性規則設定成只有老師讀得到。
+     * 規則本身的 get() 不受用戶端讀取權限限制，所以仍能拿它驗證註冊。
+     */
+    async loadJoinCode() {
+      const { db, fs } = await getFirebase()
+      try {
+        const snap = await fs.getDoc(fs.doc(db, COLLECTIONS.config, 'secret'))
+        return snap.exists() ? snap.data().registrationCode || '' : ''
+      } catch {
+        return '' // 非老師讀不到，屬正常情況
+      }
+    },
+
+    async saveJoinCode(code) {
+      const { db, fs } = await getFirebase()
+      await fs.setDoc(
+        fs.doc(db, COLLECTIONS.config, 'secret'),
+        { registrationCode: String(code || '').trim(), updatedAt: fs.serverTimestamp() },
+        { merge: true },
+      )
     },
 
     /* ---------------- 學生 ---------------- */

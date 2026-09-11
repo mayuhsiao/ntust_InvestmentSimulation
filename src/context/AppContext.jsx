@@ -315,8 +315,13 @@ export function AppProvider({ children }) {
       },
       async activate(id, password, extra) {
         const result = await backend.activate(id, password, extra)
-        notify('帳號啟用成功', 'success')
+        notify('帳號建立成功，歡迎加入！', 'success')
         return result
+      },
+      loadJoinCode: () => backend.loadJoinCode(),
+      async saveJoinCode(code) {
+        await backend.saveJoinCode(code)
+        notify(code ? '註冊認證碼已更新' : '已關閉自行註冊', 'success')
       },
       async signOut() {
         await backend.signOut()

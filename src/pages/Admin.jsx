@@ -526,6 +526,7 @@ function ConfigPanel() {
         officialStartDate: draft.officialStartDate || '',
         initialCapital: Number(draft.initialCapital) || 0,
         benchmark: String(draft.benchmark || '0050').trim().toUpperCase(),
+        classSiteUrl: String(draft.classSiteUrl || '').trim(),
         feeRate: Number(draft.feeRate),
         feeDiscount: Number(draft.feeDiscount),
         minFee: Number(draft.minFee),
@@ -589,6 +590,9 @@ function ConfigPanel() {
           <Field label="正式開賽日" hint="按下方「正式開賽」時，起始日會換成這一天">
             <input type="date" value={draft.officialStartDate || ''} onChange={set('officialStartDate')} />
           </Field>
+          <Field label="班級網站" hint="顯示在登入頁與導覽列">
+            <input value={draft.classSiteUrl || ''} onChange={set('classSiteUrl')} placeholder="https://…" />
+          </Field>
         </div>
 
         <div className="field-row">
@@ -626,6 +630,8 @@ function ConfigPanel() {
         </div>
       </div>
     </Card>
+
+    <JoinCodePanel />
 
     <Card
       title="重置競賽資料"
@@ -666,6 +672,121 @@ function ConfigPanel() {
       </div>
     </Card>
     </div>
+  )
+}
+
+/* ================================================================== */
+/* 註冊認證碼                                                          */
+/* ================================================================== */
+
+function randomCode() {
+  // 去掉容易看錯的 0/O、1/I
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+  return Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join('')
+}
+
+function JoinCodePanel() {
+  const { loadJoinCode, saveJoinCode, students, notify } = useApp()
+  const [code, setCode] = useState('')
+  const [saved, setSaved] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    loadJoinCode()
+      .then((c) => {
+        setCode(c)
+        setSaved(c)
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [loadJoinCode])
+
+  async function save(value) {
+    setBusy(true)
+    try {
+      await saveJoinCode(value)
+      setCode(value)
+      setSaved(value)
+    } catch (err) {
+      notify(err.message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const selfRegistered = students.filter((s) => s.selfRegistered).length
+
+  return (
+    <Card
+      title="註冊認證碼"
+      sub="同學不用等老師匯入名單，輸入這組認證碼就能自己註冊帳號"
+      actions={
+        <div className="row tight">
+          <button onClick={() => setCode(randomCode())} disabled={busy || loading}>
+            產生新代碼
+          </button>
+          <button className="primary" onClick={() => save(code.trim())} disabled={busy || loading || code.trim() === saved}>
+            {busy ? <span className="loader" /> : '儲存'}
+          </button>
+        </div>
+      }
+    >
+      <div className="stack sm">
+        <div className="field-row">
+          <Field label="認證碼" hint="留空 = 關閉自行註冊，只有名單中的學號能建立帳號">
+            <input
+              value={code}
+              onChange={(e) => setCode(e.target.value.toUpperCase())}
+              placeholder={loading ? '讀取中…' : '例如 EMRD115'}
+              disabled={loading}
+              className="mono"
+              style={{ fontSize: 18, letterSpacing: '0.12em', fontWeight: 700 }}
+            />
+          </Field>
+          <div>
+            <label>目前狀態</label>
+            <div style={{ paddingTop: 6 }}>
+              {loading ? (
+                <span className="loader" />
+              ) : saved ? (
+                <>
+                  <span className="badge brand">已開放自行註冊</span>
+                  <div className="small muted" style={{ marginTop: 5 }}>
+                    已有 {selfRegistered} 位同學用認證碼註冊
+                  </div>
+                </>
+              ) : (
+                <>
+                  <span className="badge warn">未開放</span>
+                  <div className="small muted" style={{ marginTop: 5 }}>
+                    目前只有已匯入名單的學號能建立帳號
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {saved && (
+          <div className="notice info">
+            請在課堂上公布這組認證碼：
+            <b className="mono" style={{ fontSize: 17, letterSpacing: '0.12em' }}>
+              {saved}
+            </b>
+            <br />
+            同學到登入頁點「註冊新帳號」，填學號、認證碼、密碼與姓名即可加入。
+          </div>
+        )}
+
+        <div className="notice">
+          <b>認證碼存在哪裡？</b>
+          <br />
+          存在 Firestore 的 <span className="mono">config/secret</span>，安全性規則設定成<b>只有老師讀得到</b>，
+          但規則本身仍能用它驗證註冊。所以外人就算自己註冊了 Firebase 帳號，也拿不到認證碼、加不進來。
+        </div>
+      </div>
+    </Card>
   )
 }
 

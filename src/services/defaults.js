@@ -14,6 +14,9 @@ export const DEFAULT_CONFIG = {
   /** 正式開賽日，「正式開賽重置」會把 startDate 換成這一天 */
   officialStartDate: '2026-09-17',
 
+  /** 班級網站，會顯示在登入頁與導覽列 */
+  classSiteUrl: 'https://emrd115.netlify.app/',
+
   initialCapital: 2000000,
   benchmark: '0050',
   lockTrading: false, // 鎖定後學生無法下單（結算/展示用）

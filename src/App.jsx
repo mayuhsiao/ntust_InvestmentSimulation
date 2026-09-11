@@ -7,6 +7,7 @@ import History from './pages/History.jsx'
 import Leaderboard from './pages/Leaderboard.jsx'
 import Admin from './pages/Admin.jsx'
 import Account from './pages/Account.jsx'
+import NtustLogo from './components/NtustLogo.jsx'
 import { pct, tone, dateTime } from './lib/format.js'
 
 const TABS = [
@@ -61,12 +62,26 @@ export default function App() {
       <header className="topbar">
         <div className="topbar-inner">
           <div className="logo">
-            <span className="logo-mark">📈</span>
+            <span className="logo-mark">
+              <NtustLogo size={32} variant="mark" />
+            </span>
             <span>
               台股投資模擬競賽
               <small>{config.name}</small>
             </span>
           </div>
+
+          {config.classSiteUrl && (
+            <a
+              className="site-link"
+              href={config.classSiteUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={config.classSiteUrl}
+            >
+              🏫 班級網站 ↗
+            </a>
+          )}
 
           <div className="spacer" />
 

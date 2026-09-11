@@ -1,18 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#1f4fd8" />
-      <stop offset="100%" stop-color="#7b3ff2" />
-    </linearGradient>
-  </defs>
-  <rect width="64" height="64" rx="14" fill="url(#g)" />
-  <path
-    d="M12 44 L24 30 L33 38 L52 17"
-    fill="none"
-    stroke="#fff"
-    stroke-width="5"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  />
-  <path d="M40 17 H52 V29" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <title>國立臺灣科技大學 台股投資模擬競賽</title>
+  <circle cx="100" cy="100" r="99" fill="#0b5ea8" />
+  <circle cx="100" cy="100" r="90" fill="none" stroke="#fff" stroke-width="2.5" />
+  <circle cx="100" cy="100" r="78" fill="#fff" />
+  <g transform="translate(100 100) scale(1.15) translate(-100 -100)">
+    <path
+      d="M 100,48 L 133,67 L 133,105 L 117,114.2 L 117,152 L 100,161.8 L 100,121.5 L 83,111.7 L 83,152 L 67,142.8 L 67,67 Z
+         M 100,68 a 17,17 0 1,0 0.1,0 Z"
+      fill="#0b5ea8"
+      fill-rule="evenodd"
+    />
+  </g>
 </svg>

@@ -104,27 +104,53 @@ service cloud.firestore {
       return signedIn() && exists(/databases/$(database)/documents/students/$(myId()));
     }
 
+    // 老師設定的註冊認證碼。
+    // config/secret 用戶端只有老師讀得到，但規則裡的 get() 不受該限制，
+    // 所以仍可用來驗證註冊，外人即使自行註冊 Firebase 帳號也拿不到這組碼。
+    function registrationCode() {
+      return exists(/databases/$(database)/documents/config/secret)
+        ? get(/databases/$(database)/documents/config/secret).data.get('registrationCode', '')
+        : '';
+    }
+
+    function joinCodeOk() {
+      return registrationCode() != ''
+             && request.resource.data.get('joinCode', '') == registrationCode();
+    }
+
     // ---------- 競賽設定 ----------
-    // 所有登入者可讀，只有老師能改
+    // config/secret 只有老師能讀，其餘設定全班可讀；一律只有老師能改
     match /config/{docId} {
-      allow read: if signedIn();
+      allow read: if isAdmin() || (signedIn() && docId != 'secret');
       allow write: if isAdmin();
     }
 
     // ---------- 學生名單 ----------
     match /students/{studentId} {
-      // 排行榜需要看到全班姓名與組別
-      allow read: if signedIn();
+      // 讀自己的資料一定可以（註冊流程要先確認學號在不在名單中）
+      allow get: if signedIn() && (studentId == myId() || isAdmin() || inRoster());
+      // 列出全班（排行榜）僅限名單成員與老師
+      allow list: if signedIn() && (isAdmin() || inRoster());
 
       // 老師可以新增／修改／刪除任何人
       allow write: if isAdmin();
 
-      // 老師本人第一次啟用帳號時，允許建立自己的資料
+      // 自行註冊：只能建立自己的學號，且必須附上正確的註冊認證碼
       allow create: if signedIn()
                     && studentId == myId()
-                    && myId() in adminIds();
+                    && request.resource.data.uid == request.auth.uid
+                    && (
+                         myId() in adminIds()
+                         || (
+                              request.resource.data.role == 'student'
+                              && request.resource.data.name is string
+                              && request.resource.data.name.size() >= 1
+                              && request.resource.data.name.size() <= 30
+                              && joinCodeOk()
+                            )
+                       );
 
-      // 學生「首次啟用帳號」：只能認領自己的學號，且只能寫這幾個欄位
+      // 名單中已有的學號「首次啟用」：只能認領自己的學號，且只能寫這幾個欄位
       allow update: if signedIn()
                     && studentId == myId()
                     && changedKeys().hasOnly(['uid', 'activated', 'activatedAt', 'name', 'group', 'role'])
@@ -134,8 +160,8 @@ service cloud.firestore {
 
     // ---------- 交易紀錄 ----------
     match /trades/{tradeId} {
-      // 全班可讀（排行榜與持股比較需要）
-      allow read: if signedIn();
+      // 全班可讀（排行榜與持股比較需要），但僅限名單成員
+      allow read: if isAdmin() || inRoster();
 
       // 只能用自己的學號下單，而且必須在老師匯入的名單中；老師可代任何學生下單
       allow create: if signedIn()
@@ -169,7 +195,7 @@ service cloud.firestore {
 
     // ---------- 每日結算 ----------
     match /settlements/{date} {
-      allow read: if signedIn();
+      allow read: if isAdmin() || inRoster();
       allow write: if isAdmin();
     }
 

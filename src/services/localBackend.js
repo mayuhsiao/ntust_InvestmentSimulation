@@ -18,6 +18,7 @@ const K = {
   settlements: `${NS}settlements`,
   secrets: `${NS}secrets`,
   session: `${NS}session`,
+  joinCode: `${NS}joincode`,
 }
 
 function read(key, fallback) {
@@ -73,7 +74,7 @@ export function createLocalBackend() {
       return id
     },
 
-    async activate(studentId, password, { name, group } = {}) {
+    async activate(studentId, password, { name, group, joinCode } = {}) {
       const id = normalizeId(studentId)
       if (!id) throw new Error('請輸入學號')
       if (String(password).length < 6) throw new Error('密碼至少 6 個字元')
@@ -84,17 +85,23 @@ export function createLocalBackend() {
       const students = read(K.students, [])
       let student = students.find((s) => s.studentId === id)
       const roster = students.filter((s) => s.role !== 'admin')
+      const isFirstUser = students.length === 0
 
       if (!student) {
-        // 名單裡沒有這個學號：只有管理者或第一位使用者可以自行建立
-        if (!isAdminId(id) && roster.length > 0) {
-          throw new Error('名單中查無此學號，請聯絡老師確認')
+        // 名單中沒有這個學號：管理者、第一位使用者，或持有正確認證碼者可自行建立
+        const canSelfRegister = isAdminId(id) || isFirstUser
+        if (!canSelfRegister) {
+          const expected = read(K.joinCode, '')
+          if (!expected) throw new Error('名單中查無此學號，且老師尚未開放自行註冊')
+          if (String(joinCode || '').trim() !== expected) throw new Error('註冊認證碼不正確')
+          if (!name) throw new Error('請輸入姓名')
         }
         student = makeStudent({
           studentId: id,
           name: name || id,
           group: group || '',
-          role: isAdminId(id) || roster.length === 0 ? 'admin' : 'student',
+          role: isAdminId(id) || isFirstUser ? 'admin' : 'student',
+          selfRegistered: !canSelfRegister,
         })
         students.push(student)
       }
@@ -148,6 +155,14 @@ export function createLocalBackend() {
       const next = { ...DEFAULT_CONFIG, ...read(K.config, {}), ...patch, updatedAt: Date.now() }
       write(K.config, next)
       return next
+    },
+
+    async loadJoinCode() {
+      return read(K.joinCode, '')
+    },
+
+    async saveJoinCode(code) {
+      write(K.joinCode, String(code || '').trim())
     },
 
     /* ---------------- 學生 ---------------- */
