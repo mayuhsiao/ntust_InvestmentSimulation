@@ -2,7 +2,11 @@
 
 > 國立臺灣科技大學 — 國際經濟趨勢與策略分析(彭文彥)
 
-一個給課堂使用的台股投資模擬競賽網站。每位同學拿到相同的起始本金，在指定期間內買賣**上市／上櫃真實股票**，系統以**每日收盤價**結算淨值並即時排名。
+一個給課堂使用的投資模擬競賽網站。每位同學拿到相同的起始本金，在指定期間內買賣**真實的台股與美股**，系統以**每日收盤價**結算淨值並即時排名。
+
+🔗 **競賽網站**：<https://emrd-invest.netlify.app/>
+
+📖 **使用手冊（含截圖）**：[DOC/](DOC/README.md)　—　[學生使用手冊](DOC/01-學生使用手冊.md)｜[老師管理手冊](DOC/02-老師管理手冊.md)｜[交易規則說明](DOC/03-交易規則說明.md)
 
 ![tech](https://img.shields.io/badge/React-18-61dafb) ![tech](https://img.shields.io/badge/Vite-6-646cff) ![tech](https://img.shields.io/badge/Firebase-11-ffca28) ![tech](https://img.shields.io/badge/Netlify-Functions-00c7b7)
 
