@@ -6,10 +6,15 @@
  *
  * 資料來源：
  *   1. Yahoo Finance chart API — 一次取回整段區間的日收盤價，
- *      上市用 .TW、上櫃用 .TWO。速度最快，為主要來源。
+ *      上市用 .TW、上櫃用 .TWO。速度最快，為歷史資料的主要來源。
  *   2. 證交所 STOCK_DAY — 官方逐月「各日成交資訊」，Yahoo 失敗時備援。
  *   3. 證交所 / 櫃買中心 OpenAPI — 全市場代號清單，
- *      用來判斷上市或上櫃、補股票名稱、以及提供最新收盤價。
+ *      用來判斷上市或上櫃、補股票名稱、以及校正最近一日的官方收盤價。
+ *   4. 證交所即時行情（mis.twse.com.tw）— 台股「今天」這一筆一律以它為準：
+ *      收盤後是正式收盤價，盤中是即時成交價。Yahoo 股市、各家看盤軟體
+ *      都是接這個來源；Yahoo Finance 的台股報價則有延遲，且當日那一根
+ *      K 棒有時要隔一陣子才會和官方收盤價對齊，直接拿來用會跟同學在
+ *      Yahoo 股市看到的數字不一樣。
  */
 
 const UA =
@@ -19,6 +24,7 @@ const UA =
 const TWSE_LIST_URL = 'https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL'
 const TPEX_LIST_URL = 'https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes'
 const TWSE_STOCK_DAY = 'https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY'
+const TWSE_MIS_URL = 'https://mis.twse.com.tw/stock/api/getStockInfo.jsp'
 const YAHOO_HOSTS = ['https://query1.finance.yahoo.com', 'https://query2.finance.yahoo.com']
 
 /** 收盤價往前多抓幾天，讓起始日剛好遇到休市時仍有前一個收盤價可用 */
@@ -72,6 +78,15 @@ function todayInTaipei() {
 function marketClosedInTaipei() {
   const taipei = new Date(Date.now() + 8 * 3600 * 1000)
   return taipei.getUTCHours() >= 14
+}
+
+/** 台股是否正在交易（平日 09:00–14:00，含收盤後等待定案的半小時） */
+function marketSessionActiveInTaipei() {
+  const taipei = new Date(Date.now() + 8 * 3600 * 1000)
+  const dow = taipei.getUTCDay()
+  if (dow === 0 || dow === 6) return false
+  const h = taipei.getUTCHours()
+  return h >= 9 && h < 14
 }
 
 /** 民國日期 '115/09/10' -> '2026-09-10' */
@@ -214,6 +229,7 @@ export async function resolveSymbol(rawCode) {
       market: entry.market,
       name: entry.name,
       lastClose: entry.close,
+      lastCloseDate: entry.date,
     }
   }
   // 不在清單內（可能是當天無成交或剛上市）：預設當成上市，抓不到時再試上櫃
@@ -324,6 +340,124 @@ async function fetchTwseOfficial(stockNo, start, end) {
 }
 
 /* ------------------------------------------------------------------ */
+/* 來源 3：證交所即時行情（MIS）                                          */
+/* ------------------------------------------------------------------ */
+
+const isTaiwanMarket = (market) => market === 'TWSE' || market === 'TPEX'
+
+/**
+ * MIS 的最新成交價：`z` 在沒有新成交的那一秒會是 '-'，
+ * 這時 `trade.z`（最後一筆成交）或 `pz`（前一筆）仍有值。
+ */
+function misPrice(row) {
+  for (const v of [row.z, row.trade?.z, row.pz]) {
+    const n = toNumber(v)
+    if (n != null && n > 0) return n
+  }
+  return null
+}
+
+/**
+ * 一次查多檔的即時行情。失敗只會讓對應代號沒有資料，不會丟錯。
+ * @param {{code:string, market:string}[]} items
+ * @returns {Promise<Map<string, object>>} code -> 即時資料
+ */
+export async function fetchTwseRealtime(items) {
+  const map = new Map()
+  const seen = new Set()
+  const tw = []
+  for (const it of items) {
+    if (!it || !isTaiwanMarket(it.market) || seen.has(it.code)) continue
+    seen.add(it.code)
+    tw.push(it)
+  }
+  if (!tw.length) return map
+
+  const chunks = []
+  for (let i = 0; i < tw.length; i += 50) chunks.push(tw.slice(i, i + 50))
+
+  await mapWithLimit(chunks, 2, async (chunk) => {
+    const exCh = chunk.map((it) => `${it.market === 'TPEX' ? 'otc' : 'tse'}_${it.code}.tw`).join('|')
+    let json = null
+    try {
+      json = await getJson(`${TWSE_MIS_URL}?ex_ch=${exCh}&json=1&delay=0&_=${Date.now()}`, { timeout: 8000 })
+    } catch (err) {
+      console.warn(`[報價] 證交所即時行情取得失敗：${err.message}`)
+      return
+    }
+    for (const row of json?.msgArray || []) {
+      const d = String(row?.d || '')
+      if (!row?.c || !/^\d{8}$/.test(d)) continue
+      map.set(String(row.c), {
+        code: String(row.c),
+        name: row.n || '',
+        market: row.ex === 'otc' ? 'TPEX' : 'TWSE',
+        date: `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`,
+        time: row.trade?.t || row.t || '',
+        price: misPrice(row),
+        prevClose: toNumber(row.y),
+        open: toNumber(row.o),
+        high: toNumber(row.h),
+        low: toNumber(row.l),
+      })
+    }
+  })
+  return map
+}
+
+/**
+ * 用交易所的官方數字校正 Yahoo 的資料（只對台股）。
+ *
+ *   1. 代號清單附帶的最新官方收盤價（OpenAPI，收盤後才會更新）
+ *      → 若 Yahoo 那一天的收盤價不同，以官方為準。
+ *   2. 即時行情今天這一筆
+ *      → 14:00 之後：就是正式收盤價，直接寫進 closes（Yahoo 的當日 K 棒
+ *        有時會停在最後一盤前的價格，或還沒出現）。
+ *      → 14:00 之前：當作盤中參考價，取代 Yahoo 延遲的盤中價。
+ *
+ * @returns {{ intraday: object|null, closeSources: Record<string,string> }}
+ */
+function reconcileWithExchange({ closes, resolved, realtime, lower, end, intraday }) {
+  const closeSources = {}
+  if (!isTaiwanMarket(resolved.market)) return { intraday, closeSources }
+
+  const officialDate = resolved.lastCloseDate
+  if (officialDate && resolved.lastClose != null && officialDate >= lower && officialDate <= end) {
+    closes[officialDate] = resolved.lastClose
+    closeSources[officialDate] = 'twse'
+  }
+
+  const today = todayInTaipei()
+  const rt = realtime?.get(resolved.code)
+  if (!rt || rt.date !== today || rt.price == null) return { intraday, closeSources }
+  // 查的是很久以前的區間就不必附今天的資料
+  if (shiftDays(end, LOOKBACK_DAYS) < today) return { intraday, closeSources }
+
+  if (marketClosedInTaipei()) {
+    if (today >= lower && today <= end) {
+      closes[today] = rt.price
+      closeSources[today] = 'twse-mis'
+    }
+    return { intraday, closeSources }
+  }
+
+  delete closes[today]
+  return {
+    closeSources,
+    intraday: {
+      date: today,
+      price: rt.price,
+      time: rt.time,
+      prevClose: rt.prevClose,
+      open: rt.open,
+      high: rt.high,
+      low: rt.low,
+      source: 'twse-mis',
+    },
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* 對外：取單一檔股票的日收盤價                                           */
 /* ------------------------------------------------------------------ */
 
@@ -364,9 +498,19 @@ function withholdUnsettledBar(closes, data) {
   return null
 }
 
-export async function getDailyCloses({ code, start, end }) {
+/**
+ * @param {object} opts
+ * @param {Map|null} [opts.realtime] 批次查詢時預先抓好的即時行情；未提供則自行查詢
+ */
+export async function getDailyCloses({ code, start, end, realtime }) {
   const resolved = await resolveSymbol(code)
   const errors = []
+
+  // 台股另外查證交所即時行情，和 Yahoo 並行以免拖慢回應
+  const realtimePromise =
+    realtime === undefined && isTaiwanMarket(resolved.market)
+      ? fetchTwseRealtime([resolved])
+      : Promise.resolve(realtime || null)
 
   const attempts = [
     () => fetchYahoo(resolved.symbol, start, end),
@@ -385,7 +529,17 @@ export async function getDailyCloses({ code, start, end }) {
       }
 
       // 尚未收盤的那一筆不列入收盤價，另外放在 intraday 供參考
-      const intraday = withholdUnsettledBar(closes, data)
+      const yahooIntraday = withholdUnsettledBar(closes, data)
+
+      // 台股以交易所的官方數字為準（最近一日收盤價、今日即時／收盤價）
+      const { intraday, closeSources } = reconcileWithExchange({
+        closes,
+        resolved,
+        realtime: await realtimePromise,
+        lower,
+        end,
+        intraday: yahooIntraday ? { ...yahooIntraday, source: data.source } : null,
+      })
 
       const dates = Object.keys(closes).sort()
       return {
@@ -396,6 +550,8 @@ export async function getDailyCloses({ code, start, end }) {
         currency: data.currency || 'TWD',
         source: data.source,
         closes,
+        /** 由交易所官方數字確認過的日期 -> 'twse'（OpenAPI）| 'twse-mis'（即時行情） */
+        closeSources,
         intraday,
         marketOpen: Boolean(intraday),
         firstDate: dates[0] || null,
@@ -428,9 +584,15 @@ export async function getDailyClosesBatch({ codes, start, end }) {
     throw e
   }
 
+  // 台股的即時行情一次查完（MIS 一個請求可帶多檔），不必每檔各打一次
+  const resolvedAll = await Promise.all(
+    unique.map((code) => resolveSymbol(code).catch(() => null)),
+  )
+  const realtime = await fetchTwseRealtime(resolvedAll.filter(Boolean))
+
   const rows = await mapWithLimit(unique, 6, async (code) => {
     try {
-      return await getDailyCloses({ code, start, end })
+      return await getDailyCloses({ code, start, end, realtime })
     } catch (err) {
       return { code, error: err.message, closes: {} }
     }
@@ -539,4 +701,4 @@ async function searchYahoo(q) {
     }))
 }
 
-export { todayInTaipei, marketClosedInTaipei }
+export { todayInTaipei, marketClosedInTaipei, marketSessionActiveInTaipei }

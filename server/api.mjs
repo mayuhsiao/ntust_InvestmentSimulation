@@ -12,6 +12,7 @@ import {
   searchGlobal,
   todayInTaipei,
   marketClosedInTaipei,
+  marketSessionActiveInTaipei,
 } from './twstock.mjs'
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
@@ -61,11 +62,11 @@ export async function handleApi(pathname, params) {
         const { start, end } = readRange(params)
         const codesParam = params.get('codes')
         const today = todayInTaipei()
-        // 查詢區間已經結束 → 資料不會再變，可以放心長快取
-        const cache =
-          end < today
-            ? 'public, max-age=3600, s-maxage=86400'
-            : 'public, max-age=180, s-maxage=300'
+        // 查詢區間已經結束 → 資料不會再變，可以放心長快取；
+        // 台股盤中則縮短快取，讓盤中參考價貼近證交所即時行情
+        let cache = 'public, max-age=180, s-maxage=300'
+        if (end < today) cache = 'public, max-age=3600, s-maxage=86400'
+        else if (marketSessionActiveInTaipei()) cache = 'public, max-age=30, s-maxage=60'
 
         if (codesParam) {
           const codes = codesParam.split(',').map((c) => c.trim()).filter(Boolean)

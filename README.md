@@ -217,7 +217,8 @@ settlements/{YYYY-MM-DD}    每日結算的淨值與名次
 
 | 用途 | 來源 |
 |---|---|
-| 日收盤價（主要） | Yahoo Finance chart API — 上市 `.TW`、上櫃 `.TWO`、美股原代號 |
+| 台股當日收盤價／盤中參考價 | [證交所即時行情 MIS](https://mis.twse.com.tw/)（上市 `tse_`、上櫃 `otc_`），與 Yahoo 股市同源 |
+| 日收盤價（主要） | Yahoo Finance chart API — 上市 `.TW`、上櫃 `.TWO`、美股原代號；台股最近一日以 OpenAPI 官方收盤價校正 |
 | 日收盤價（備援） | [證交所 STOCK_DAY](https://www.twse.com.tw/) 各日成交資訊 |
 | 台股全市場代號清單 | [證交所 OpenAPI](https://openapi.twse.com.tw/) + [櫃買中心 OpenAPI](https://www.tpex.org.tw/openapi/) |
 | 美股代號搜尋 | Yahoo Finance search API（美股 6,000 多檔，改成即時查詢不整包下載） |

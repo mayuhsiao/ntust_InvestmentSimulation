@@ -66,6 +66,26 @@ export default function Trade() {
     }
   }, [stock?.code, config.startDate, config.endDate, lastTradingDay])
 
+  /* 該市場盤中時每分鐘靜默更新一次，讓盤中參考價跟上證交所即時行情 */
+  useEffect(() => {
+    if (!stock?.code || !quote?.marketOpen) return
+    let cancelled = false
+    const end = config.endDate < lastTradingDay ? config.endDate : lastTradingDay
+    const id = setInterval(() => {
+      fetchQuote(stock.code, config.startDate, end)
+        .then((q) => {
+          if (!cancelled) setQuote(q)
+        })
+        .catch(() => {
+          /* 靜默更新失敗就保留上一筆 */
+        })
+    }, 60000)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [stock?.code, quote?.marketOpen, config.startDate, config.endDate, lastTradingDay])
+
   const dates = useMemo(() => (quote?.closes ? Object.keys(quote.closes).sort() : []), [quote])
 
   /**
@@ -88,6 +108,13 @@ export default function Trade() {
   }, [dates, quote, effectiveDate])
 
   const change = execPrice != null && prevPrice != null ? execPrice - prevPrice : null
+
+  // 這一筆收盤價的來源：經交易所官方數字確認過的日期標示為證交所
+  const sourceLabel = !quote?.source
+    ? ''
+    : quote.closeSources?.[execDate] || quote.source !== 'yahoo'
+      ? '證交所'
+      : 'Yahoo Finance'
 
   const isUS = (quote?.market || stock?.market) === 'US'
   const currency = quote?.currency || (isUS ? 'USD' : 'TWD')
@@ -226,7 +253,7 @@ export default function Trade() {
                     　≈ 新台幣 <b>{money(execPriceTWD, 2)}</b> / 股（匯率 {fmtPrice(fxRate)}）
                   </>
                 )}
-                {quote?.source ? `　資料來源：${quote.source === 'yahoo' ? 'Yahoo Finance' : '證交所'}` : ''}
+                {sourceLabel ? `　資料來源：${sourceLabel}` : ''}
               </div>
 
               {quoteError && <div className="notice error" style={{ marginTop: 12 }}>{quoteError}</div>}
@@ -238,6 +265,17 @@ export default function Trade() {
                     {currency === 'USD' ? '$' : ''}
                     {fmtPrice(quote.intraday.price)}
                   </b>
+                  {quote.intraday.prevClose > 0 && (
+                    <span className={`tabular ${tone(quote.intraday.price - quote.intraday.prevClose)}`}>
+                      {' '}
+                      {quote.intraday.price > quote.intraday.prevClose ? '▲' : quote.intraday.price < quote.intraday.prevClose ? '▼' : ''}
+                      {Math.abs(quote.intraday.price - quote.intraday.prevClose).toFixed(2)}（
+                      {pct((quote.intraday.price - quote.intraday.prevClose) / quote.intraday.prevClose)}）
+                    </span>
+                  )}
+                  {quote.intraday.source === 'twse-mis'
+                    ? `（證交所即時行情${quote.intraday.time ? ` ${quote.intraday.time}` : ''}，每分鐘更新）`
+                    : '（Yahoo Finance 延遲報價）'}
                   。競賽一律以已確認的收盤價成交，該市場收盤後才能用當日收盤價下單。
                 </div>
               )}
