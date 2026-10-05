@@ -312,10 +312,12 @@ function GroupBoard() {
   }, [compare.ids, groupRanking, bench, calendar, myGroup])
 
   function exportCSV() {
-    const header = ['名次', '組別', '人數', '組總資產', '組本金', '組損益', '組報酬率', '當日漲跌', '成員（依報酬率）']
+    const header = [
+      '名次', '組別', '人數', '組總資產', '組本金', '組損益', '平均每人損益', '組報酬率', '當日漲跌', '成員（依報酬率）',
+    ]
     const body = groupRanking.map((g) => [
       g.rank, g.name, g.members.length,
-      Math.round(g.total), Math.round(g.capital), Math.round(g.profit),
+      Math.round(g.total), Math.round(g.capital), Math.round(g.profit), Math.round(g.avgProfit),
       (g.returnPct * 100).toFixed(2) + '%', Math.round(g.dayChange),
       g.members.map((m) => `${m.name || m.studentId} ${pct(m.returnPct)}`).join('、'),
     ])
@@ -353,7 +355,8 @@ function GroupBoard() {
           <div className="label">目前第一名組別</div>
           <div className="value sm">{best.name}</div>
           <div className="foot">
-            <span className={tone(best.returnPct)}>{pct(best.returnPct)}</span>　{best.members.length} 人
+            <span className={tone(best.returnPct)}>{pct(best.returnPct)}</span>　{best.members.length} 人　平均每人{' '}
+            <span className={tone(best.avgProfit)}>{signedMoney(best.avgProfit)}</span>
           </div>
         </div>
         <div className="stat">
@@ -394,7 +397,7 @@ function GroupBoard() {
 
       <Card
         title="分組排行榜"
-        sub="組報酬率 = 全組損益總和 ÷ 全組本金總和"
+        sub="依組報酬率（全組損益 ÷ 全組本金）排名，不受各組人數影響；每人本金相同時，名次與平均每人損益一致"
         actions={<button onClick={exportCSV}>匯出分組成績 CSV</button>}
         tight
       >
@@ -407,6 +410,7 @@ function GroupBoard() {
                 <th className="num">人數</th>
                 <th className="num">組總資產</th>
                 <th className="num">組損益</th>
+                <th className="num">平均每人損益</th>
                 <th className="num">組報酬率</th>
                 <th className="num">當日漲跌</th>
                 <th>成員（依報酬率）</th>
@@ -429,6 +433,7 @@ function GroupBoard() {
                     <td className="num">{g.members.length}</td>
                     <td className="num">{money(g.total)}</td>
                     <td className={`num ${tone(g.profit)}`}>{signedMoney(g.profit)}</td>
+                    <td className={`num ${tone(g.avgProfit)}`}>{signedMoney(g.avgProfit)}</td>
                     <td className={`num ${tone(g.returnPct)}`}>
                       <b>{pct(g.returnPct)}</b>
                     </td>

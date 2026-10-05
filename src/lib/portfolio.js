@@ -364,6 +364,8 @@ const byName = (a, b) => a.localeCompare(b, 'zh-TW', { numeric: true })
 /**
  * 分組排名
  *   組報酬率 = 全組損益總和 ÷ 全組本金總和（大家本金相同時，就等於組員報酬率的平均）
+ *   分母會隨人數變大，所以不受各組人數影響；
+ *   每人本金相同時，依組報酬率或平均每人損益排名的結果完全一樣。
  *   未分組的同學不列入，由呼叫端另外列出。
  *
  * rows 為 rankAll() 的結果（已依個人名次排序），
@@ -399,6 +401,7 @@ export function rankGroups(rows) {
       capital,
       total,
       profit: total - capital,
+      avgProfit: (total - capital) / members.length,
       returnPct: capital > 0 ? (total - capital) / capital : 0,
       avgReturnPct: members.reduce((s, m) => s + m.returnPct, 0) / members.length,
       dayChange: last && prev ? last.total - prev.total : 0,
