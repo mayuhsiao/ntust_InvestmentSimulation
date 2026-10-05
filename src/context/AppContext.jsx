@@ -346,7 +346,28 @@ export function AppProvider({ children }) {
 
   const groupRanking = useMemo(() => rankGroups(ranking), [ranking])
 
+  /** 學號 → 所屬組別的名次資訊；未分組的同學不在裡面 */
+  const groupOf = useMemo(() => {
+    const map = {}
+    for (const g of groupRanking) {
+      for (const m of g.members) {
+        map[m.studentId] = {
+          key: g.key,
+          name: g.name,
+          rank: g.rank,
+          returnPct: g.returnPct,
+          size: g.members.length,
+          memberRank: m.memberRank,
+        }
+      }
+    }
+    return map
+  }, [groupRanking])
+
+  const ungrouped = useMemo(() => ranking.filter((r) => !groupOf[r.studentId]), [ranking, groupOf])
+
   const myRank = useMemo(() => ranking.find((r) => r.studentId === authId) || null, [ranking, authId])
+  const myGroup = (authId && groupOf[authId]) || null
 
   const benchmarkSeries = useMemo(() => {
     const entry = prices[config.benchmark || '0050']
@@ -517,7 +538,10 @@ export function AppProvider({ children }) {
     myCapital,
     ranking,
     groupRanking,
+    groupOf,
+    ungrouped,
     myRank,
+    myGroup,
     benchmarkSeries,
     // 操作
     ...actions,

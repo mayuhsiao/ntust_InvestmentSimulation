@@ -300,6 +300,7 @@ export function rankAll({ students, tradesByStudent, lookup, calendar, initialCa
       studentId: s.studentId,
       name: s.name,
       group: s.group || '',
+      capital,
       total: snap.total,
       cash: snap.cash,
       marketValue: snap.marketValue,
@@ -323,24 +324,89 @@ export function rankAll({ students, tradesByStudent, lookup, calendar, initialCa
   return rows
 }
 
-/** 分組排名（以組內成員平均報酬率排序） */
+/* ------------------------------------------------------------------
+ * 分組
+ * ------------------------------------------------------------------ */
+
+/** 這些寫法一律視為「未分組」 */
+const NO_GROUP = new Set(['', '未分組', '無', '-', '—', 'N/A', 'NA', 'NONE'])
+const CN_DIGIT = { 〇: 0, 零: 0, 一: 1, 二: 2, 兩: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 }
+
+/** 「七」→ 7、「十二」→ 12、「二十」→ 20、「12」→ 12；看不懂就回傳 null */
+function parseGroupNumber(s) {
+  if (/^\d+$/.test(s)) return Number(s)
+  if (!/^[〇零一二兩三四五六七八九十]+$/.test(s)) return null
+  const at = s.indexOf('十')
+  if (at === -1) return s.length === 1 ? CN_DIGIT[s] : null
+  if (s.indexOf('十', at + 1) !== -1) return null
+  const tens = at === 0 ? 1 : at === 1 ? CN_DIGIT[s[0]] : null
+  const rest = s.slice(at + 1)
+  const ones = rest === '' ? 0 : rest.length === 1 ? CN_DIGIT[rest] : null
+  return tens == null || ones == null ? null : tens * 10 + ones
+}
+
+/**
+ * 組別的比對鍵。同學自行註冊時組別是自由輸入，
+ * 「第二組」「第2組」「２」「 2組 」都要算同一組，否則一組會被拆成好幾組。
+ * 回傳空字串代表未分組。
+ */
+export function groupKey(raw) {
+  const s = String(raw ?? '').normalize('NFKC').replace(/\s+/g, '').toUpperCase()
+  if (NO_GROUP.has(s)) return ''
+  const core = s.replace(/^第/, '').replace(/[組组]$/, '')
+  if (!core) return s
+  const n = parseGroupNumber(core)
+  return n == null ? core : `#${n}`
+}
+
+const byName = (a, b) => a.localeCompare(b, 'zh-TW', { numeric: true })
+
+/**
+ * 分組排名
+ *   組報酬率 = 全組損益總和 ÷ 全組本金總和（大家本金相同時，就等於組員報酬率的平均）
+ *   未分組的同學不列入，由呼叫端另外列出。
+ *
+ * rows 為 rankAll() 的結果（已依個人名次排序），
+ * 每位組員會多一個 memberRank（組內名次）。
+ */
 export function rankGroups(rows) {
   const map = new Map()
   for (const r of rows) {
-    const key = r.group || '未分組'
-    const g = map.get(key) || { group: key, members: [], total: 0, profit: 0, capital: 0 }
+    const key = groupKey(r.group)
+    if (!key) continue
+    const g = map.get(key) || { key, spellings: new Map(), members: [] }
+    const spelling = String(r.group).trim()
+    g.spellings.set(spelling, (g.spellings.get(spelling) || 0) + 1)
     g.members.push(r)
-    g.total += r.total
-    g.profit += r.profit
-    g.capital += r.total - r.profit
     map.set(key, g)
   }
-  const groups = [...map.values()].map((g) => ({
-    ...g,
-    returnPct: g.capital > 0 ? g.profit / g.capital : 0,
-    avgReturnPct: g.members.reduce((s, m) => s + m.returnPct, 0) / (g.members.length || 1),
-  }))
-  groups.sort((a, b) => b.returnPct - a.returnPct)
+
+  const groups = [...map.values()].map(({ key, spellings, members }) => {
+    // 同一組有多種寫法時，顯示最多人用的那一種
+    const name = [...spellings].sort((a, b) => b[1] - a[1] || byName(a[0], b[0]))[0][0]
+    const capital = members.reduce((s, m) => s + m.capital, 0)
+    const total = members.reduce((s, m) => s + m.total, 0)
+    const series = members[0].series.map((p, i) => {
+      const t = members.reduce((s, m) => s + m.series[i].total, 0)
+      return { date: p.date, total: t, returnPct: capital > 0 ? (t - capital) / capital : 0 }
+    })
+    const last = series[series.length - 1]
+    const prev = series[series.length - 2]
+    return {
+      key,
+      name,
+      members: members.map((m, i) => ({ ...m, memberRank: i + 1 })),
+      capital,
+      total,
+      profit: total - capital,
+      returnPct: capital > 0 ? (total - capital) / capital : 0,
+      avgReturnPct: members.reduce((s, m) => s + m.returnPct, 0) / members.length,
+      dayChange: last && prev ? last.total - prev.total : 0,
+      series,
+    }
+  })
+
+  groups.sort((a, b) => b.returnPct - a.returnPct || byName(a.name, b.name))
   groups.forEach((g, i) => {
     g.rank = i + 1
   })

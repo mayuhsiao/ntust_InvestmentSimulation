@@ -4,7 +4,7 @@ import { Card, Field } from '../components/ui.jsx'
 import { money, pct, dateTime, tone } from '../lib/format.js'
 
 export default function Account() {
-  const { me, authId, isAdmin, mode, config, mySnapshot, myRank, changePassword, notify, lastSync } = useApp()
+  const { me, authId, isAdmin, mode, config, mySnapshot, myRank, myGroup, changePassword, notify, lastSync } = useApp()
   const [form, setForm] = useState({ old: '', next: '', confirm: '' })
   const [busy, setBusy] = useState(false)
   const [theme, setTheme] = useState(() => localStorage.getItem('ntust-invest:theme') || 'system')
@@ -45,6 +45,10 @@ export default function Account() {
           <b className={tone(mySnapshot.returnPct)}>{pct(mySnapshot.returnPct)}</b>
         </div>
         <div className="kv"><span>目前名次</span><b>{myRank ? `第 ${myRank.rank} 名` : '—'}</b></div>
+        <div className="kv">
+          <span>分組名次</span>
+          <b>{myGroup ? `${myGroup.name} 第 ${myGroup.rank} 名（組內第 ${myGroup.memberRank} 名）` : '—'}</b>
+        </div>
         <div className="kv"><span>資料儲存</span><b>{mode === 'firebase' ? 'Firebase 雲端' : '本機瀏覽器（示範模式）'}</b></div>
         <div className="kv"><span>報價最後更新</span><b>{lastSync ? dateTime(lastSync) : '—'}</b></div>
       </Card>

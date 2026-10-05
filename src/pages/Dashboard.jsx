@@ -7,14 +7,15 @@ import { sortTrades } from '../lib/portfolio.js'
 
 export default function Dashboard({ onNavigate }) {
   const {
-    me,
     authId,
     config,
     mySnapshot: snap,
     myNav,
     myTrades,
     myRank,
+    myGroup,
     ranking,
+    groupRanking,
     benchmarkSeries,
     lastTradingDay,
     calendar,
@@ -96,7 +97,11 @@ export default function Dashboard({ onNavigate }) {
         <Stat
           label="目前名次"
           value={myRank ? `第 ${myRank.rank} 名` : '—'}
-          foot={ranking.length ? `全班 ${ranking.length} 人${me?.group ? `　${me.group}` : ''}` : '尚無其他參賽者'}
+          foot={
+            ranking.length
+              ? `全班 ${ranking.length} 人${myGroup ? `　${myGroup.name} 第 ${myGroup.rank} 名（共 ${groupRanking.length} 組）` : ''}`
+              : '尚無其他參賽者'
+          }
         />
       </div>
 
