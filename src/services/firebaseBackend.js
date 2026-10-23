@@ -5,15 +5,23 @@
  * 當作 Firebase Auth 的信箱，學生完全不用記信箱。
  *
  * Firestore 結構：
- *   config/contest                競賽設定
+ *   config/contest                競賽設定（含 rosterEpoch／tradesEpoch，見 loadClassData）
  *   students/{學號}               學生名單（含 role、是否已啟用）
  *   trades/{autoId}               每一筆買賣紀錄
- *   prices/{代號}                 日收盤價快取
+ *   prices/_pack0…                日收盤價快取，全部股票打包成一份文件（見 loadPrices）
+ *   prices/{代號}                 舊版的一檔一份快取，只在打包文件不存在時才讀
  *   settlements/{YYYY-MM-DD}      每日結算淨值
+ *
+ * Spark 免費方案每天只有 5 萬次讀取，所以讀取一律盡量省：
+ * 全班名單與交易紀錄存在瀏覽器（IndexedDB），每次只補抓變動的部分；
+ * 報價快取打包成單一文件；每日結算只有老師的管理頁會讀。
  */
 
 import { getFirebase, emailFor, normalizeId, isAdminId } from '../firebase.js'
 import { DEFAULT_CONFIG, COLLECTIONS, CONFIG_DOC, makeStudent } from './defaults.js'
+import { readCache, writeCache, removeCache } from './localCache.js'
+import { plain, latest, mergeSince, asciiJson, chunkText } from '../lib/sync.js'
+import { sortTrades } from '../lib/portfolio.js'
 
 const AUTH_ERRORS = {
   'auth/invalid-credential': '學號或密碼錯誤',
@@ -58,7 +66,45 @@ function clean(obj) {
   return out
 }
 
+const toStudent = (snap) => makeStudent({ ...plain(snap.data()), studentId: snap.id })
+const toTrade = (snap) => ({ ...plain(snap.data()), id: snap.id })
+
+/* ---------------- 本機快取與增量同步 ---------------- */
+
+/** 瀏覽器快取的格式版本，格式改變時加一，舊快取自動作廢 */
+const CACHE_FORMAT = 1
+const cacheKey = (app) => `class:${app.options.projectId}`
+
+/**
+ * 交易紀錄每次都往回重抓這段時間。學生可以撤銷 30 分鐘內的交易（見 firestore.rules），
+ * 重抓這段就能發現被撤銷的紀錄；更早的交易學生已經刪不掉，只有老師能刪（會遞增 tradesEpoch）。
+ */
+const TRADE_LOOKBACK = 35 * 60 * 1000
+/** 名單只會在註冊、啟用帳號時變動（都會寫入 activatedAt），留一點緩衝即可 */
+const ROSTER_LOOKBACK = 5 * 60 * 1000
+
+/**
+ * 增量同步看不到「刪除」與「修改」，所以老師刪交易、改名單時，
+ * 把 config/contest 的版本號加一，大家的瀏覽器快取對不上就會整包重抓一次。
+ */
+const EPOCH_FIELD = { students: 'rosterEpoch', trades: 'tradesEpoch' }
+
+function bumpEpochs(batch, fs, db, ...collections) {
+  const patch = {}
+  for (const name of collections) patch[EPOCH_FIELD[name]] = fs.increment(1)
+  batch.set(fs.doc(db, COLLECTIONS.config, CONFIG_DOC), patch, { merge: true })
+}
+
+/* ---------------- 報價快取打包 ---------------- */
+
+const PACK_IDS = ['_pack0', '_pack1', '_pack2', '_pack3']
+/** 每段的字元數；asciiJson 保證一個字元一個位元組，單一文件上限 1 MiB */
+const PACK_PART_SIZE = 900_000
+
 export function createFirebaseBackend() {
+  /** 上次讀到的報價快取來源：'pack' 打包文件／'legacy' 舊版一檔一份 */
+  let priceSource = null
+
   /**
    * 註冊過程中會先建立 Auth 帳號，那一瞬間 Firebase 就會回報「已登入」，
    * App 會立刻切到登入後的畫面，害後面的錯誤訊息沒地方顯示。
@@ -114,7 +160,7 @@ export function createFirebaseBackend() {
       const id = normalizeId(studentId)
       if (!id) return null
       const snap = await fs.getDoc(fs.doc(db, COLLECTIONS.students, id))
-      return snap.exists() ? makeStudent({ ...snap.data(), studentId: id }) : null
+      return snap.exists() ? toStudent(snap) : null
     },
 
     /**
@@ -282,7 +328,10 @@ export function createFirebaseBackend() {
     async resetPassword(studentId) {
       const { db, fs } = await getFirebase()
       const id = normalizeId(studentId)
-      await fs.updateDoc(fs.doc(db, COLLECTIONS.students, id), { activated: false, uid: null })
+      const batch = fs.writeBatch(db)
+      batch.update(fs.doc(db, COLLECTIONS.students, id), { activated: false, uid: null })
+      bumpEpochs(batch, fs, db, 'students')
+      await batch.commit()
       throw new Error(
         `已清除 ${id} 的啟用狀態。請再到 Firebase 主控台 → Authentication 刪除 ${emailFor(id)}，該生即可重新啟用帳號。`,
       )
@@ -325,11 +374,68 @@ export function createFirebaseBackend() {
       )
     },
 
+    /* ---------------- 全班資料（增量同步） ---------------- */
+    /**
+     * 全班名單 + 交易紀錄。優先用瀏覽器快取，只向 Firestore 補抓有變動的部分：
+     *   交易：createdAt 在「快取中最新一筆往前 TRADE_LOOKBACK」之後的文件
+     *   名單：activatedAt 在快取之後的文件（自行註冊、首次啟用都會寫入）
+     * config 的 rosterEpoch／tradesEpoch 與快取不同時（老師刪改過資料），該部分整包重讀。
+     * 一律向伺服器查詢（getDocsFromServer）：離線時寧可報錯，也不要把不完整的結果存進快取。
+     */
+    async loadClassData(config = {}) {
+      const { app, db, fs } = await getFirebase()
+      const key = cacheKey(app)
+      const rosterEpoch = Number(config.rosterEpoch) || 0
+      const tradesEpoch = Number(config.tradesEpoch) || 0
+      const cached = await readCache(key)
+      const usable =
+        cached?.format === CACHE_FORMAT && Array.isArray(cached.students) && Array.isArray(cached.trades)
+
+      const changedSince = async (name, field, since) => {
+        const snap = await fs.getDocsFromServer(
+          fs.query(fs.collection(db, name), fs.where(field, '>=', fs.Timestamp.fromMillis(since))),
+        )
+        return snap.docs
+      }
+
+      const syncStudents = async () => {
+        if (!usable || cached.rosterEpoch !== rosterEpoch) return this.loadStudents()
+        const since = latest(cached.students, 'activatedAt') - ROSTER_LOOKBACK
+        const docs = await changedSince(COLLECTIONS.students, 'activatedAt', since)
+        return mergeSince(cached.students, docs.map(toStudent), { field: 'activatedAt', since, key: 'studentId' })
+      }
+
+      const syncTrades = async () => {
+        if (!usable || cached.tradesEpoch !== tradesEpoch) return this.loadTrades()
+        const since = latest(cached.trades, 'createdAt') - TRADE_LOOKBACK
+        const docs = await changedSince(COLLECTIONS.trades, 'createdAt', since)
+        return sortTrades(mergeSince(cached.trades, docs.map(toTrade), { field: 'createdAt', since, key: 'id' }))
+      }
+
+      const [students, trades] = await Promise.all([syncStudents(), syncTrades()])
+      await writeCache(key, { format: CACHE_FORMAT, rosterEpoch, tradesEpoch, students, trades, savedAt: Date.now() })
+      return { students, trades }
+    },
+
+    /** 登出時清掉瀏覽器裡的全班資料（共用電腦） */
+    async forgetLocalCache() {
+      const { app } = await getFirebase()
+      await removeCache(cacheKey(app))
+    },
+
+    /** 讓所有人的瀏覽器快取作廢（老師直接在 Firebase 主控台改過資料時用） */
+    async invalidateCaches() {
+      const { db, fs } = await getFirebase()
+      const batch = fs.writeBatch(db)
+      bumpEpochs(batch, fs, db, 'students', 'trades')
+      await batch.commit()
+    },
+
     /* ---------------- 學生 ---------------- */
     async loadStudents() {
       const { db, fs } = await getFirebase()
-      const snap = await fs.getDocs(fs.collection(db, COLLECTIONS.students))
-      return snap.docs.map((d) => makeStudent({ ...d.data(), studentId: d.id }))
+      const snap = await fs.getDocsFromServer(fs.collection(db, COLLECTIONS.students))
+      return snap.docs.map(toStudent)
     },
 
     async saveStudents(list) {
@@ -337,7 +443,7 @@ export function createFirebaseBackend() {
       const chunks = []
       for (let i = 0; i < list.length; i += 400) chunks.push(list.slice(i, i + 400))
 
-      for (const chunk of chunks) {
+      for (const [n, chunk] of chunks.entries()) {
         const batch = fs.writeBatch(db)
         for (const raw of chunk) {
           const id = normalizeId(raw.studentId)
@@ -349,6 +455,7 @@ export function createFirebaseBackend() {
             { merge: true },
           )
         }
+        if (n === chunks.length - 1) bumpEpochs(batch, fs, db, 'students')
         await batch.commit()
       }
       return this.loadStudents()
@@ -363,14 +470,15 @@ export function createFirebaseBackend() {
       const batch = fs.writeBatch(db)
       trades.docs.forEach((d) => batch.delete(d.ref))
       batch.delete(fs.doc(db, COLLECTIONS.students, id))
+      bumpEpochs(batch, fs, db, 'students', 'trades')
       await batch.commit()
     },
 
     /* ---------------- 交易 ---------------- */
     async loadTrades() {
       const { db, fs } = await getFirebase()
-      const snap = await fs.getDocs(fs.query(fs.collection(db, COLLECTIONS.trades), fs.orderBy('date')))
-      return snap.docs.map((d) => ({ ...d.data(), id: d.id }))
+      const snap = await fs.getDocsFromServer(fs.query(fs.collection(db, COLLECTIONS.trades), fs.orderBy('date')))
+      return snap.docs.map(toTrade)
     },
 
     async addTrade(trade) {
@@ -384,7 +492,17 @@ export function createFirebaseBackend() {
 
     async removeTrade(id) {
       const { db, fs } = await getFirebase()
-      await fs.deleteDoc(fs.doc(db, COLLECTIONS.trades, id))
+      const batch = fs.writeBatch(db)
+      batch.delete(fs.doc(db, COLLECTIONS.trades, id))
+      bumpEpochs(batch, fs, db, 'trades')
+      try {
+        await batch.commit()
+      } catch (err) {
+        // 學生撤銷自己 30 分鐘內的交易時沒有權限改設定；
+        // 那段期間每次同步都會重抓（TRADE_LOOKBACK），不必通知也看得到刪除
+        if (err?.code !== 'permission-denied') throw err
+        await fs.deleteDoc(fs.doc(db, COLLECTIONS.trades, id))
+      }
     },
 
     /** 清空整個集合（重置測試資料用），回傳刪除筆數 */
@@ -397,37 +515,80 @@ export function createFirebaseBackend() {
         docs.slice(i, i + 400).forEach((d) => batch.delete(d.ref))
         await batch.commit()
       }
+      // 全部刪完才通知，避免有人在刪到一半時重抓，又把還沒刪掉的資料存進快取
+      if (EPOCH_FIELD[name]) {
+        const batch = fs.writeBatch(db)
+        bumpEpochs(batch, fs, db, name)
+        await batch.commit()
+      }
       return docs.length
     },
 
     /* ---------------- 報價快取 ---------------- */
+    /**
+     * 全部股票的日收盤價打包成一段 JSON，存在 prices/_pack0（超過單一文件上限才接續 _pack1…），
+     * 同學開網頁只要讀 1 份文件，不必一檔股票讀一份。
+     * 還沒有打包文件時（剛升級到這個版本）退回讀舊版的一檔一份，等老師的瀏覽器打包。
+     */
     async loadPrices() {
       const { db, fs } = await getFirebase()
-      const snap = await fs.getDocs(fs.collection(db, COLLECTIONS.prices))
+      const col = fs.collection(db, COLLECTIONS.prices)
+      const snap = await fs.getDocsFromServer(fs.query(col, fs.where(fs.documentId(), 'in', PACK_IDS)))
+      const parts = new Map(snap.docs.map((d) => [d.id, d.data()]))
+      const head = parts.get(PACK_IDS[0])
+      if (head) {
+        // 同一次寫入的各段 seq 相同，對不上代表不完整
+        const pieces = PACK_IDS.slice(0, head.parts).map((id) => parts.get(id))
+        if (pieces.every((p) => p?.seq === head.seq)) {
+          try {
+            const out = JSON.parse(pieces.map((p) => p.data).join(''))
+            priceSource = 'pack'
+            return out
+          } catch {
+            /* 內容壞掉就改讀舊格式，老師的瀏覽器會重新打包 */
+          }
+        }
+      }
+
+      const legacy = await fs.getDocsFromServer(col)
       const out = {}
-      snap.docs.forEach((d) => {
-        out[d.id] = d.data()
-      })
+      for (const d of legacy.docs) if (!PACK_IDS.includes(d.id)) out[d.id] = plain(d.data())
+      priceSource = 'legacy'
       return out
     },
 
-    async savePrices(entries) {
+    /**
+     * 只有老師寫得進去（見 firestore.rules）。
+     * 傳入的是合併好的完整快取，整份覆寫；分段在同一個 batch 寫入，不會讀到一半新一半舊。
+     */
+    async savePrices(all) {
       const { db, fs } = await getFirebase()
-      const list = Object.entries(entries)
-      for (let i = 0; i < list.length; i += 300) {
-        const batch = fs.writeBatch(db)
-        for (const [code, data] of list.slice(i, i + 300)) {
-          // 不用 merge：呼叫端已經合併成完整快取，
-          // merge 會把 closes 當成 map 做深層合併，導致移除掉的日期又被寫回來。
-          batch.set(
-            fs.doc(db, COLLECTIONS.prices, code),
-            clean({ ...data, code, updatedAt: fs.serverTimestamp() }),
-          )
+      const pieces = chunkText(asciiJson(all), PACK_PART_SIZE)
+      if (pieces.length > PACK_IDS.length) throw new Error('報價快取超過容量上限')
+      const seq = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
+      const batch = fs.writeBatch(db)
+      PACK_IDS.forEach((id, i) => {
+        const ref = fs.doc(db, COLLECTIONS.prices, id)
+        if (i < pieces.length) {
+          batch.set(ref, {
+            code: id, // 舊版程式讀整個集合時會把它當成一檔股票，給個代號避免出錯
+            seq,
+            part: i,
+            parts: pieces.length,
+            data: pieces[i],
+            updatedAt: fs.serverTimestamp(),
+          })
+        } else {
+          batch.delete(ref) // 快取變小時清掉多出來的段落
         }
-        await batch.commit()
-      }
-      return entries
+      })
+      await batch.commit()
+      priceSource = 'pack'
+      return all
     },
+
+    /** 這次讀到的是舊版一檔一份的快取，需要老師的瀏覽器打包一次 */
+    pricePackMissing: () => priceSource === 'legacy',
 
     /* ---------------- 每日結算 ---------------- */
     async loadSettlements() {

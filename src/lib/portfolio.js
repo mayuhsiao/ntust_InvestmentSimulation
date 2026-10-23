@@ -17,7 +17,8 @@ export function sortTrades(trades) {
   })
 }
 
-function toMillis(v) {
+/** Firestore Timestamp／Date／毫秒數字 → 毫秒；沒有值回傳 0 */
+export function toMillis(v) {
   if (!v) return 0
   if (typeof v === 'number') return v
   if (v?.toMillis) return v.toMillis()

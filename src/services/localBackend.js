@@ -189,6 +189,15 @@ export function createLocalBackend() {
       write(K.joinCode, String(code || '').trim())
     },
 
+    /* ---------------- 全班資料 ---------------- */
+    // 資料本來就在瀏覽器裡，不需要增量同步
+    async loadClassData() {
+      return { students: await this.loadStudents(), trades: await this.loadTrades() }
+    },
+
+    async forgetLocalCache() {},
+    async invalidateCaches() {},
+
     /* ---------------- 學生 ---------------- */
     async loadStudents() {
       return read(K.students, []).map((s) => makeStudent(s))

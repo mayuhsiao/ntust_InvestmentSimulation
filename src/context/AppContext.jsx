@@ -28,6 +28,18 @@ function rangeEnd(config, today = todayISO()) {
   return capped < config.startDate ? config.startDate : capped
 }
 
+/** 載入失敗時給使用者看得懂的說明 */
+function loadErrorMessage(err) {
+  if (err?.code === 'permission-denied' || /insufficient permissions/i.test(err?.message || '')) {
+    return '沒有存取資料的權限。可能是你的學號還沒加入班級名單，或 Firestore 安全性規則尚未部署 —— 請聯絡老師確認。'
+  }
+  if (err?.code === 'resource-exhausted') {
+    return '今天的 Firebase 免費讀取額度已經用完，請稍後再試（額度約在台灣時間下午 3～4 點重置）。'
+  }
+  if (err?.code === 'unavailable') return '連不上 Firestore，請檢查網路連線後按「↻ 更新」再試一次。'
+  return err?.message || '資料載入失敗'
+}
+
 /** 台股 13:30 收盤、約 14:00 定案；與 server/twstock.mjs 的判斷一致 */
 function marketClosedNow() {
   return new Date(Date.now() + 8 * 3600 * 1000).getUTCHours() >= 14
@@ -51,9 +63,13 @@ export function AppProvider({ children }) {
   /** 已登入、但名單裡還沒有這個學號（例如註冊時認證碼打錯） */
   const [needsJoin, setNeedsJoin] = useState(false)
 
-  // 用 ref 讀取最新值，避免非同步流程抓到過期的 closure
+  // 用 ref 讀取最新值，避免非同步流程抓到過期的 closure。
+  // 報價例外：寫入時就先更新 ref（見 storePrices），不等畫面重繪，
+  // 剛載入完立刻開始的同步才不會拿舊的快取當基礎，把剛讀到的資料蓋掉
   const pricesRef = useRef(prices)
-  pricesRef.current = prices
+  // 報價快取成功讀進來之前，老師的瀏覽器不能回寫，否則會用殘缺的資料蓋掉全班共用的快取
+  const pricesLoadedRef = useRef(false)
+  const settlementsLoadedRef = useRef(false)
   const configRef = useRef(config)
   configRef.current = config
   const tradesRef = useRef(trades)
@@ -69,6 +85,11 @@ export function AppProvider({ children }) {
     notify._t = window.setTimeout(() => setToast(null), 4200)
   }, [])
 
+  const storePrices = useCallback((next) => {
+    pricesRef.current = next
+    setPrices(next)
+  }, [])
+
   /* ---------------- 登入狀態 ---------------- */
   useEffect(() => backend.onAuthChange((id) => setAuthId(id)), [])
 
@@ -77,31 +98,27 @@ export function AppProvider({ children }) {
     setLoading(true)
     setError(null)
     try {
-      const [cfg, studentList, tradeList, priceCache] = await Promise.all([
-        backend.loadConfig(),
-        backend.loadStudents(),
-        backend.loadTrades(),
+      // 先讀設定：裡面的版本號決定瀏覽器裡暫存的全班資料還能不能用
+      const cfg = { ...DEFAULT_CONFIG, ...(await backend.loadConfig()) }
+      const [{ students: studentList, trades: tradeList }, priceCache] = await Promise.all([
+        backend.loadClassData(cfg),
         backend.loadPrices(),
       ])
-      setConfigState({ ...DEFAULT_CONFIG, ...cfg })
+      setConfigState(cfg)
       setStudents(studentList)
       setTrades(tradeList)
-      setPrices(priceCache)
-      return { cfg: { ...DEFAULT_CONFIG, ...cfg }, tradeList, priceCache }
+      storePrices(priceCache)
+      pricesLoadedRef.current = true
+      return { cfg, studentList, tradeList, priceCache }
     } catch (err) {
       console.error(err)
-      const denied = err?.code === 'permission-denied' || /insufficient permissions/i.test(err?.message || '')
-      setError(
-        denied
-          ? '沒有存取資料的權限。可能是你的學號還沒加入班級名單，或 Firestore 安全性規則尚未部署 —— 請聯絡老師確認。'
-          : err.message || '資料載入失敗',
-      )
+      setError(loadErrorMessage(err))
       throw err
     } finally {
       setLoading(false)
       setBooting(false)
     }
-  }, [])
+  }, [storePrices])
 
   useEffect(() => {
     if (authId === undefined) return
@@ -130,12 +147,16 @@ export function AppProvider({ children }) {
 
       if (cancelled) return
       loadAll()
-        .then(({ cfg, tradeList, priceCache }) => syncPrices({ cfg, tradeList, priceCache }))
+        .then(({ cfg, studentList, tradeList, priceCache }) => {
+          // 畫面還沒依新名單重繪就要開始同步報價，先在這裡判斷是不是老師（只有老師能回寫報價快取）
+          isAdminRef.current =
+            isAdminId(authId) || studentList.some((s) => s.studentId === authId && s.role === 'admin')
+          return syncPrices({ cfg, tradeList, priceCache })
+        })
         .catch(() => {})
       loadStockList()
         .then(setStockList)
         .catch((err) => console.warn('代號清單載入失敗', err.message))
-      backend.loadSettlements().then(setSettlements).catch(() => {})
     })()
 
     return () => {
@@ -148,7 +169,7 @@ export function AppProvider({ children }) {
   /**
    * 每筆快取都記錄它實際涵蓋的區間 [from, to]，
    * 只要競賽區間往前或往後延伸就會重抓，避免「改了起始日卻補不到前段資料」。
-   * 寫入一律使用 setPrices(prev => …)，多個同步同時完成也不會互相覆蓋。
+   * 寫入一律以 pricesRef 當下最新的快取為基礎合併，多個同步同時完成也不會互相覆蓋。
    */
   const syncPrices = useCallback(
     async ({ cfg, tradeList, priceCache, force = false, extraCodes = [] } = {}) => {
@@ -179,6 +200,10 @@ export function AppProvider({ children }) {
       })
 
       if (!stale.length) {
+        // 老師第一次用到新版時，把舊的「一檔一份文件」報價快取打包成單一文件
+        if (isAdminRef.current && pricesLoadedRef.current && backend.pricePackMissing?.() && Object.keys(cache).length) {
+          backend.savePrices(cache).catch((err) => console.warn('報價快取寫入失敗', err.message))
+        }
         setLastSync(new Date())
         return
       }
@@ -209,32 +234,28 @@ export function AppProvider({ children }) {
         }
 
         if (Object.keys(fetched).length) {
-          const persist = {}
-          setPrices((prev) => {
-            const next = { ...prev }
-            for (const [code, data] of Object.entries(fetched)) {
-              const old = prev[code]
-              const closes = { ...(old?.closes || {}), ...data.closes }
-              // 之前在盤中抓到的當日即時價要清掉，不能混進收盤價
-              if (data.intradayDate) delete closes[data.intradayDate]
-              const entry = {
-                ...data,
-                name: data.name || old?.name || '',
-                market: data.market || old?.market || '',
-                currency: data.currency || old?.currency || 'TWD',
-                closes,
-                from: old?.from && old.from < data.from ? old.from : data.from,
-                to: old?.to && old.to > data.to ? old.to : data.to,
-                pending: old?.to > data.to ? Boolean(old.pending) : data.pending,
-              }
-              next[code] = entry
-              persist[code] = entry
+          const prev = pricesRef.current
+          const next = { ...prev }
+          for (const [code, data] of Object.entries(fetched)) {
+            const old = prev[code]
+            const closes = { ...(old?.closes || {}), ...data.closes }
+            // 之前在盤中抓到的當日即時價要清掉，不能混進收盤價
+            if (data.intradayDate) delete closes[data.intradayDate]
+            next[code] = {
+              ...data,
+              name: data.name || old?.name || '',
+              market: data.market || old?.market || '',
+              currency: data.currency || old?.currency || 'TWD',
+              closes,
+              from: old?.from && old.from < data.from ? old.from : data.from,
+              to: old?.to && old.to > data.to ? old.to : data.to,
+              pending: old?.to > data.to ? Boolean(old.pending) : data.pending,
             }
-            return next
-          })
-          // 只有老師負責維護全班共用的快取；學生每次都直接向 /api 取得報價
-          if (isAdminRef.current) {
-            backend.savePrices(persist).catch((err) => console.warn('報價快取寫入失敗', err.message))
+          }
+          storePrices(next)
+          // 只有老師負責維護全班共用的快取（整份打包寫入）；學生每次都直接向 /api 取得報價
+          if (isAdminRef.current && pricesLoadedRef.current) {
+            backend.savePrices(next).catch((err) => console.warn('報價快取寫入失敗', err.message))
           }
         }
         setLastSync(new Date())
@@ -245,7 +266,7 @@ export function AppProvider({ children }) {
         setPriceSyncing(false)
       }
     },
-    [notify],
+    [notify, storePrices],
   )
 
   /** 有交易的股票若還沒有報價，自動補抓（單筆下單與批次匯入都適用） */
@@ -412,9 +433,13 @@ export function AppProvider({ children }) {
         notify(code ? '註冊認證碼已更新' : '已關閉自行註冊', 'success')
       },
       async signOut() {
+        await backend.forgetLocalCache()
         await backend.signOut()
         setTrades([])
         setStudents([])
+        setSettlements([])
+        settlementsLoadedRef.current = false
+        pricesLoadedRef.current = false
         setAuthId(null)
       },
       async changePassword(oldPw, newPw) {
@@ -482,6 +507,24 @@ export function AppProvider({ children }) {
         syncPrices({ cfg: merged, tradeList: [] })
         notify(`正式開賽！已清除 ${removed} 筆測試交易，起始日設為 ${merged.startDate}`, 'success')
         return { removed, settled, config: merged }
+      },
+
+      /** 每日結算只有老師的管理頁用得到，進管理頁才讀，同學開網頁不必多讀這些文件 */
+      async loadSettlements() {
+        if (settlementsLoadedRef.current) return
+        settlementsLoadedRef.current = true
+        try {
+          setSettlements(await backend.loadSettlements())
+        } catch (err) {
+          settlementsLoadedRef.current = false
+          console.warn('結算資料載入失敗', err.message)
+        }
+      },
+
+      /** 直接在 Firebase 主控台改過資料時，讓所有人下次開網頁重新下載完整的名單與交易紀錄 */
+      async invalidateCaches() {
+        await backend.invalidateCaches()
+        notify('已通知全班：下次開網頁會重新下載完整資料', 'success')
       },
 
       async saveSettlements(rows) {

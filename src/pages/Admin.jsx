@@ -15,7 +15,14 @@ const SECTIONS = [
 ]
 
 export default function Admin() {
+  const { loadSettlements } = useApp()
   const [section, setSection] = useState('roster')
+
+  // 每日結算只有管理頁用得到，進來才讀
+  useEffect(() => {
+    loadSettlements()
+  }, [loadSettlements])
+
   return (
     <div className="stack">
       <div className="tabs" style={{ padding: 0, borderBottom: '1px solid var(--border)' }}>
@@ -505,7 +512,8 @@ function ImportPanel() {
 /* ================================================================== */
 
 function ConfigPanel() {
-  const { config, saveConfig, isPractice, trades, settlements, clearTrades, startOfficial, notify } = useApp()
+  const { config, saveConfig, isPractice, trades, settlements, clearTrades, startOfficial, invalidateCaches, notify } =
+    useApp()
   const [draft, setDraft] = useState(config)
   const [busy, setBusy] = useState(false)
   const [resetting, setResetting] = useState(false)
@@ -538,6 +546,17 @@ function ConfigPanel() {
       })
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function resync() {
+    setResetting(true)
+    try {
+      await invalidateCaches()
+    } catch (err) {
+      notify(`通知失敗：${err.message}`, 'error')
+    } finally {
+      setResetting(false)
     }
   }
 
@@ -693,6 +712,16 @@ function ConfigPanel() {
 
         <div className="small muted">
           「只清除交易紀錄」會保留目前的起始日與測試期設定，適合測試期間反覆演練。
+        </div>
+
+        <div className="row" style={{ marginTop: 6 }}>
+          <button onClick={resync} disabled={resetting}>
+            要求全班重新下載資料
+          </button>
+          <span className="small muted">
+            為了節省 Firebase 讀取額度，每個人的瀏覽器會暫存全班名單與交易紀錄，之後只下載新增的部分。
+            在網站上刪改資料會自動通知大家；只有<b>直接在 Firebase 主控台改過資料</b>時才需要按這個。
+          </span>
         </div>
       </div>
     </Card>
