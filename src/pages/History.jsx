@@ -3,7 +3,7 @@ import { useApp } from '../context/AppContext.jsx'
 import { Card, Empty, NativePrice } from '../components/ui.jsx'
 import { downloadCSV } from '../lib/csv.js'
 import { sortTrades } from '../lib/portfolio.js'
-import { money, pct, price as fmtPrice, signedMoney, tone, lots, dateTime } from '../lib/format.js'
+import { money, pct, price as fmtPrice, signedMoney, tone, lots, dateTime, shortDate } from '../lib/format.js'
 
 /** 重播交易，為每一筆賣出算出已實現損益 */
 function withRealized(trades) {
@@ -73,8 +73,8 @@ export default function History() {
   function exportCSV() {
     const marketLabel = { TWSE: '上市', TPEX: '上櫃', US: '美股' }
     const header = [
-      '學號', '姓名', '日期', '買賣別', '代號', '股票名稱', '市場',
-      '成交價', '幣別', '匯率', '股數', '成交金額(台幣)', '手續費', '證交稅', '淨額(台幣)', '已實現損益', '備註', '建立時間',
+      '學號', '姓名', '成交日', '買賣別', '代號', '股票名稱', '市場',
+      '成交價', '幣別', '匯率', '股數', '成交金額(台幣)', '手續費', '證交稅', '淨額(台幣)', '已實現損益', '備註', '下單時間',
     ]
     const body = rows.map((t) => [
       t.studentId, nameOf(t.studentId), t.date, t.side === 'BUY' ? '買進' : '賣出',
@@ -153,7 +153,7 @@ export default function History() {
               <thead>
                 <tr>
                   {scope === 'all' && <th>學生</th>}
-                  <th>日期</th>
+                  <th>下單時間</th>
                   <th>別</th>
                   <th>股票</th>
                   <th className="num">成交價</th>
@@ -175,7 +175,11 @@ export default function History() {
                         <span className="tabular">{t.studentId}</span> {nameOf(t.studentId)}
                       </td>
                     )}
-                    <td className="tabular">{t.date}</td>
+                    <td className="tabular">
+                      {t.createdAt ? dateTime(t.createdAt) : t.date}
+                      {/* 下單時間與成交日不一定同一天（例如早上下單算前一個交易日） */}
+                      <div className="small muted">成交日 {shortDate(t.date)}</div>
+                    </td>
                     <td>
                       <span className={`badge ${t.side === 'BUY' ? 'buy' : 'sell'}`}>
                         {t.side === 'BUY' ? '買進' : '賣出'}

@@ -3,7 +3,7 @@ import { backend } from '../services/backend.js'
 import { DEFAULT_CONFIG } from '../services/defaults.js'
 import { loadStockList, fetchCloses } from '../services/prices.js'
 import { makePriceLookup, buildCalendar, rankAll, rankGroups, snapshot, navSeries, FX_CODE } from '../lib/portfolio.js'
-import { marketSession } from '../lib/market.js'
+import { marketSession, usMarketSession } from '../lib/market.js'
 import { isAdminId } from '../firebase.js'
 
 const AppContext = createContext(null)
@@ -326,6 +326,13 @@ export function AppProvider({ children }) {
     [config.tradingWindow, config.benchmark, prices, today, clockTick],
   )
 
+  /** 美股時段：與台股分開判斷，只鎖美股 */
+  const usSession = useMemo(
+    () => usMarketSession({ enabled: config.tradingWindow !== 'always' }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [config.tradingWindow, clockTick],
+  )
+
   const tradesByStudent = useMemo(() => {
     const map = {}
     for (const t of trades) {
@@ -574,6 +581,7 @@ export function AppProvider({ children }) {
     ended,
     isPractice,
     session,
+    usSession,
     lastTradingDay,
     tradesByStudent,
     mySnapshot,

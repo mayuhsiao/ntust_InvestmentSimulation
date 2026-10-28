@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { useApp } from '../context/AppContext.jsx'
 import { Card, Stat, Empty, MarketBadge, NativePrice } from '../components/ui.jsx'
 import LineChart from '../components/LineChart.jsx'
-import { money, pct, price, signedMoney, tone, lots, shortDate } from '../lib/format.js'
+import { money, pct, price, signedMoney, tone, lots, shortDate, dateTime } from '../lib/format.js'
 import { sortTrades } from '../lib/portfolio.js'
 
 export default function Dashboard({ onNavigate }) {
@@ -238,7 +238,7 @@ export default function Dashboard({ onNavigate }) {
             <table>
               <thead>
                 <tr>
-                  <th>日期</th>
+                  <th>下單時間</th>
                   <th>別</th>
                   <th>股票</th>
                   <th className="num">成交價</th>
@@ -249,7 +249,7 @@ export default function Dashboard({ onNavigate }) {
               <tbody>
                 {recent.map((t) => (
                   <tr key={t.id}>
-                    <td className="tabular">{shortDate(t.date)}</td>
+                    <td className="tabular">{t.createdAt ? dateTime(t.createdAt).slice(5) : shortDate(t.date)}</td>
                     <td>
                       <span className={`badge ${t.side === 'BUY' ? 'buy' : 'sell'}`}>
                         {t.side === 'BUY' ? '買進' : '賣出'}

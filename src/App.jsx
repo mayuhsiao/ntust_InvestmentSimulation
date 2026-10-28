@@ -29,7 +29,7 @@ export default function App() {
   const {
     authId, booting, loading, error, toast, me, isAdmin, config, mode,
     signOut, refresh, priceSyncing, lastSync, myRank, mySnapshot, lastTradingDay, isPractice,
-    needsJoin, session,
+    needsJoin, session, usSession,
   } = useApp()
 
   const [page, setPage] = useState(readHash)
@@ -93,6 +93,11 @@ export default function App() {
             {mode === 'local' && <span className="badge warn">本機示範模式</span>}
             {isPractice && <span className="badge warn">測試期</span>}
             {session.blocked && <span className="badge warn">盤中休市</span>}
+            {usSession.blocked && (
+              <span className="badge warn" title={`美股暫停下單，台灣時間 ${usSession.reopenAt} 後開放`}>
+                {usSession.label}
+              </span>
+            )}
             {config.lockTrading && <span className="badge warn">交易已鎖定</span>}
             <span className="tabular">結算日 {lastTradingDay}</span>
           </div>

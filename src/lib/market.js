@@ -52,3 +52,66 @@ export function marketSession({ enabled = true, todayClosed = false, now = Date.
   }
   return { ...base, blocked: false, label: minutes < MARKET_OPEN_MIN ? '開盤前' : '已收盤' }
 }
+
+/**
+ * 美股交易時段判斷
+ * ------------------------------------------------------------------
+ * 美股常規盤為紐約時間 09:30–16:00，換算台灣時間：
+ *   夏令時間 21:30–04:00、冬令時間 22:30–05:00
+ * 一律以紐約時區計算，日光節約時間會自動切換。
+ *
+ * 不能只靠報價回傳的 marketOpen：Yahoo 開盤後要一段時間才出現當天那一筆，
+ * 下單頁也不會一直重抓報價，開盤前先選好股票、開盤後再按下單，
+ * 就會用昨天的收盤價成交。所以改以時鐘強制判斷；
+ * 收盤後多留一小時，讓收盤價定案、伺服器與瀏覽器快取都更新完。
+ */
+
+export const US_OPEN_MIN = 9 * 60 + 30 // 紐約 09:30 開盤
+export const US_CLOSE_MIN = 16 * 60 // 紐約 16:00 收盤
+export const US_DATA_READY_MIN = 17 * 60 // 紐約 17:00 起可用當日收盤價
+
+const NY_CLOCK = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York',
+  weekday: 'short',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+})
+
+/** 紐約當地的星期與分鐘數 */
+function newYorkClock(now) {
+  const parts = Object.fromEntries(NY_CLOCK.formatToParts(new Date(now)).map((p) => [p.type, p.value]))
+  return { weekday: parts.weekday, minutes: (Number(parts.hour) % 24) * 60 + Number(parts.minute) }
+}
+
+/**
+ * @param {object}  opts
+ * @param {boolean} opts.enabled  是否啟用盤中禁止交易（老師可關閉）
+ * @param {number}  opts.now      時間戳，測試用
+ * @returns 時間一律為台灣時間：time 現在、opensAt 開盤、reopenAt 可再下單
+ */
+export function usMarketSession({ enabled = true, now = Date.now() } = {}) {
+  const t = taipeiNow(now)
+  const taipeiMin = t.getUTCHours() * 60 + t.getUTCMinutes()
+  const ny = newYorkClock(now)
+  // 台北比紐約快 12（夏令）或 13（冬令）小時
+  const offset = (taipeiMin - ny.minutes + 1440) % 1440
+  const inTaipei = (nyMin) => hhmm((nyMin + offset) % 1440)
+
+  const weekend = ny.weekday === 'Sat' || ny.weekday === 'Sun'
+  const inSession = !weekend && ny.minutes >= US_OPEN_MIN && ny.minutes < US_DATA_READY_MIN
+
+  const base = {
+    weekend,
+    inSession,
+    time: hhmm(taipeiMin),
+    opensAt: inTaipei(US_OPEN_MIN),
+    reopenAt: inTaipei(US_DATA_READY_MIN),
+  }
+
+  if (!enabled) return { ...base, blocked: false, label: '不限時段' }
+  if (inSession) {
+    return { ...base, blocked: true, label: ny.minutes < US_CLOSE_MIN ? '美股盤中' : '美股收盤結算中' }
+  }
+  return { ...base, blocked: false, label: weekend ? '美股休市' : ny.minutes < US_OPEN_MIN ? '美股開盤前' : '美股已收盤' }
+}

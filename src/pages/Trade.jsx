@@ -21,6 +21,7 @@ export default function Trade() {
     notify,
     notStarted,
     session,
+    usSession,
     lookup,
   } = useApp()
 
@@ -44,7 +45,10 @@ export default function Trade() {
     setTradeDate(lastTradingDay)
   }, [lastTradingDay])
 
-  /* 選到股票就抓該檔的日收盤價 */
+  /*
+   * 選到股票就抓該檔的日收盤價。
+   * 美股開盤／收盤定案的那一刻也要重抓，否則畫面停留整晚會一直拿著舊的收盤價
+   */
   useEffect(() => {
     if (!stock?.code) return setQuote(null)
     let cancelled = false
@@ -64,7 +68,9 @@ export default function Trade() {
     return () => {
       cancelled = true
     }
-  }, [stock?.code, config.startDate, config.endDate, lastTradingDay])
+    // usSession.blocked 是刻意放進來的時間觸發器
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stock?.code, config.startDate, config.endDate, lastTradingDay, usSession.blocked])
 
   /* 該市場盤中時每分鐘靜默更新一次，讓盤中參考價跟上證交所即時行情 */
   useEffect(() => {
@@ -133,8 +139,9 @@ export default function Trade() {
       : null
 
   const locked = config.lockTrading && !isAdmin
-  // 台股盤中禁止下單；美股則看該檔自己的市場有沒有在交易（見下方 quote.marketOpen）
+  // 各市場盤中只鎖該市場：台股看台北時間，美股看紐約時間
   const sessionBlocked = session.blocked && !isAdmin && !isUS
+  const usBlocked = usSession.blocked && !isAdmin && isUS
   const outOfRange = effectiveDate < config.startDate || effectiveDate > config.endDate
 
   const problem = useMemo(() => {
@@ -144,6 +151,10 @@ export default function Trade() {
       return `現在是${session.label}（${session.time}），本競賽以收盤價成交，盤中不開放下單。今天 ${session.reopenAt} 之後即可用今日收盤價交易。`
     }
     if (!stock) return '請先在上方「選擇股票」搜尋並點選一檔股票（例如輸入 2330 後點台積電，或輸入 AAPL 買美股）'
+    if (usBlocked) {
+      return `現在是${usSession.label}（台灣時間 ${usSession.time}），本競賽以收盤價成交，美股盤中不開放下單。` +
+        `美股於台灣時間 ${usSession.opensAt} 開盤，${usSession.reopenAt} 之後即可用這一盤的收盤價交易。`
+    }
     if (loadingQuote) return '報價載入中，請稍候…'
     if (quoteError) return `取得報價失敗：${quoteError}`
     // 該檔股票所屬市場正在交易中 → 收盤價還沒定案，不能下單
@@ -164,12 +175,12 @@ export default function Trade() {
     }
     return null
   }, [
-    notStarted, locked, sessionBlocked, session, stock, loadingQuote, quoteError, quote,
+    notStarted, locked, sessionBlocked, session, usBlocked, usSession, stock, loadingQuote, quoteError, quote,
     isAdmin, execPrice, fxRate, outOfRange, shares, side, estimate, snap.cash, holding, config,
   ])
 
   // 還沒選股票只是「還沒開始」，不是錯誤，用中性樣式提示就好
-  const problemTone = (!stock || loadingQuote) && !sessionBlocked ? '' : 'warn'
+  const problemTone = (!stock || loadingQuote) && !sessionBlocked && !usBlocked ? '' : 'warn'
 
   async function submit() {
     if (problem || !estimate || !stock) return
@@ -559,7 +570,8 @@ export default function Trade() {
           <br />
           • 一律以 <b>{effectiveDate}</b> 的收盤價成交，不可指定價格
           <br />
-          • <b>該股票所屬市場開盤期間不開放下單</b>（台股平日 09:00–14:00、美股台灣時間深夜至凌晨）
+          • <b>該股票所屬市場開盤期間不開放下單</b>（台股平日 09:00–14:00、美股台灣時間 {usSession.opensAt}–
+          {usSession.reopenAt}，日光節約時間自動調整）
           <br />
           • 六日與休市日全天開放，以最近一個交易日的收盤價成交
           <br />
