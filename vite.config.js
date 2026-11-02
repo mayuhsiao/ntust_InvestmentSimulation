@@ -34,8 +34,23 @@ function devApiPlugin() {
   }
 }
 
+/** 每次建置的版本號，前端比對 /version.json 就知道網站已經更新 */
+const BUILD_ID = Date.now().toString(36)
+
+/** 建置時輸出 version.json（見 src/lib/version.js） */
+function versionFilePlugin() {
+  return {
+    name: 'ntust-version-file',
+    apply: 'build',
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: 'version.json', source: JSON.stringify({ build: BUILD_ID }) })
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [react(), devApiPlugin()],
+  plugins: [react(), devApiPlugin(), versionFilePlugin()],
+  define: { __BUILD_ID__: JSON.stringify(BUILD_ID) },
   server: { port: 5173, open: false },
   build: {
     outDir: 'dist',

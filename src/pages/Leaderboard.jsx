@@ -86,9 +86,11 @@ function SettleDateStat() {
 /* ================================================================== */
 
 function PersonBoard() {
-  const { ranking, groupOf, calendar, authId, lastTradingDay } = useApp()
+  const { ranking, groupOf, calendar, authId, lastTradingDay, classPause, isAdmin } = useApp()
   const bench = useBenchmark()
   const [expanded, setExpanded] = useState(null)
+  // 與交易紀錄同步：尖峰時段暫停查看別人的持股明細，避免跟單（自己的與老師不受限）
+  const holdingsPaused = classPause.paused && !isAdmin
 
   const defaults = useMemo(() => {
     const top = ranking.slice(0, 5).map((r) => r.studentId)
@@ -166,7 +168,16 @@ function PersonBoard() {
         <LineChart labels={chart.labels} series={chart.series} height={300} zeroLine format={axisPct} />
       </Card>
 
-      <Card title="個人排行榜" actions={<button onClick={exportCSV}>匯出成績 CSV</button>} tight>
+      <Card
+        title="個人排行榜"
+        sub={
+          holdingsPaused
+            ? `⏸ 同學的持股明細暫停查看，${classPause.until} 後恢復（每天 ${classPause.windows.join('、')}）`
+            : undefined
+        }
+        actions={<button onClick={exportCSV}>匯出成績 CSV</button>}
+        tight
+      >
         <div className="table-wrap">
           <table>
             <thead>
@@ -192,6 +203,7 @@ function PersonBoard() {
                   me={r.studentId === authId}
                   selected={compare.ids.includes(r.studentId)}
                   expanded={expanded === r.studentId}
+                  holdingsLocked={holdingsPaused && r.studentId !== authId ? classPause.until : null}
                   onToggleCompare={() => compare.toggle(r.studentId)}
                   onExpand={() => setExpanded(expanded === r.studentId ? null : r.studentId)}
                 />
@@ -204,7 +216,9 @@ function PersonBoard() {
   )
 }
 
-function RankRow({ row, group, me, selected, expanded, onToggleCompare, onExpand }) {
+/** holdingsLocked：暫停查看持股時為恢復時間（例如 '09:30'），否則為 null */
+function RankRow({ row, group, me, selected, expanded, holdingsLocked, onToggleCompare, onExpand }) {
+  const showHoldings = expanded && !holdingsLocked
   return (
     <>
       <tr style={me ? { background: 'var(--brand-soft)' } : undefined}>
@@ -226,13 +240,19 @@ function RankRow({ row, group, me, selected, expanded, onToggleCompare, onExpand
         </td>
         <td className={`num ${tone(row.dayChange)}`}>{row.dayChange ? signedMoney(row.dayChange) : '—'}</td>
         <td className="num">
-          <button className="tiny ghost" onClick={onExpand}>
-            {row.holdingCount} 檔 {expanded ? '▴' : '▾'}
-          </button>
+          {holdingsLocked ? (
+            <button className="tiny ghost" disabled title={`尖峰時段暫停查看持股明細，${holdingsLocked} 後恢復`}>
+              {row.holdingCount} 檔 🔒
+            </button>
+          ) : (
+            <button className="tiny ghost" onClick={onExpand}>
+              {row.holdingCount} 檔 {expanded ? '▴' : '▾'}
+            </button>
+          )}
         </td>
         <td className="num">{row.tradeCount}</td>
       </tr>
-      {expanded && (
+      {showHoldings && (
         <tr>
           <td colSpan={10} style={{ background: 'var(--surface-2)', whiteSpace: 'normal' }}>
             {row.snapshot.holdings.length === 0 ? (

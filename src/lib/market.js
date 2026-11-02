@@ -62,13 +62,15 @@ export function marketSession({ enabled = true, todayClosed = false, now = Date.
  *
  * 不能只靠報價回傳的 marketOpen：Yahoo 開盤後要一段時間才出現當天那一筆，
  * 下單頁也不會一直重抓報價，開盤前先選好股票、開盤後再按下單，
- * 就會用昨天的收盤價成交。所以改以時鐘強制判斷；
- * 收盤後多留一小時，讓收盤價定案、伺服器與瀏覽器快取都更新完。
+ * 就會用昨天的收盤價成交。所以改以時鐘強制判斷。
+ *
+ * 收盤後一路鎖到台灣時間隔天 10:00：美股報價在台灣時間清晨 6～9 點之間
+ * 常回傳不完整或錯誤的資料（收盤價仍在修正、盤別資訊切換），等穩定後再開放。
  */
 
 export const US_OPEN_MIN = 9 * 60 + 30 // 紐約 09:30 開盤
 export const US_CLOSE_MIN = 16 * 60 // 紐約 16:00 收盤
-export const US_DATA_READY_MIN = 17 * 60 // 紐約 17:00 起可用當日收盤價
+export const US_REOPEN_TAIPEI_MIN = 10 * 60 // 台灣時間隔天 10:00 起可用該盤收盤價
 
 const NY_CLOCK = new Intl.DateTimeFormat('en-US', {
   timeZone: 'America/New_York',
@@ -97,21 +99,44 @@ export function usMarketSession({ enabled = true, now = Date.now() } = {}) {
   // 台北比紐約快 12（夏令）或 13（冬令）小時
   const offset = (taipeiMin - ny.minutes + 1440) % 1440
   const inTaipei = (nyMin) => hhmm((nyMin + offset) % 1440)
+  // 台灣時間隔天 10:00 換算回紐約時間，落在紐約開盤當天的晚上（21:00 或 22:00）
+  const reopenNy = (US_REOPEN_TAIPEI_MIN - offset + 1440) % 1440
 
   const weekend = ny.weekday === 'Sat' || ny.weekday === 'Sun'
-  const inSession = !weekend && ny.minutes >= US_OPEN_MIN && ny.minutes < US_DATA_READY_MIN
+  const inSession = !weekend && ny.minutes >= US_OPEN_MIN && ny.minutes < reopenNy
 
   const base = {
     weekend,
     inSession,
     time: hhmm(taipeiMin),
     opensAt: inTaipei(US_OPEN_MIN),
-    reopenAt: inTaipei(US_DATA_READY_MIN),
+    reopenAt: hhmm(US_REOPEN_TAIPEI_MIN),
   }
 
   if (!enabled) return { ...base, blocked: false, label: '不限時段' }
   if (inSession) {
-    return { ...base, blocked: true, label: ny.minutes < US_CLOSE_MIN ? '美股盤中' : '美股收盤結算中' }
+    return { ...base, blocked: true, label: ny.minutes < US_CLOSE_MIN ? '美股盤中' : '美股收盤資料確認中' }
   }
   return { ...base, blocked: false, label: weekend ? '美股休市' : ny.minutes < US_OPEN_MIN ? '美股開盤前' : '美股已收盤' }
+}
+
+/**
+ * 全班交易紀錄暫停查詢的時段（台灣時間，每天）
+ * ------------------------------------------------------------------
+ * 台股開盤前後與美股開盤前後是同學最常上線查看的時候：
+ * 這兩段暫停查詢全班交易，分散流量，也避免開盤前看著別人的下單跟單。
+ * 老師不受限制；自己的交易紀錄隨時可查。
+ */
+export const CLASS_TRADES_PAUSES = [
+  [8 * 60, 9 * 60 + 30], // 08:00–09:30
+  [20 * 60 + 30, 22 * 60 + 30], // 20:30–22:30
+]
+
+/** @returns {{paused:boolean, until?:string, windows:string[]}} */
+export function classTradesPause(now = Date.now()) {
+  const t = taipeiNow(now)
+  const minutes = t.getUTCHours() * 60 + t.getUTCMinutes()
+  const windows = CLASS_TRADES_PAUSES.map(([from, to]) => `${hhmm(from)}–${hhmm(to)}`)
+  const hit = CLASS_TRADES_PAUSES.find(([from, to]) => minutes >= from && minutes < to)
+  return hit ? { paused: true, until: hhmm(hit[1]), windows } : { paused: false, windows }
 }

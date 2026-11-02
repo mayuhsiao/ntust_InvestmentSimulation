@@ -27,6 +27,22 @@
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
 
+# 網頁本身與版本檔每次都向伺服器確認，部署後一進站就是新版
+[[headers]]
+  for = "/"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/version.json"
+  [headers.values]
+    Cache-Control = "no-cache"
+
 [[headers]]
   for = "/assets/*"
   [headers.values]

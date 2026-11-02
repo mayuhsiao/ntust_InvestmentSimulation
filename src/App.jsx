@@ -29,7 +29,7 @@ export default function App() {
   const {
     authId, booting, loading, error, toast, me, isAdmin, config, mode,
     signOut, refresh, priceSyncing, lastSync, myRank, mySnapshot, lastTradingDay, isPractice,
-    needsJoin, session, usSession,
+    needsJoin, session, usSession, updateReady,
   } = useApp()
 
   const [page, setPage] = useState(readHash)
@@ -134,6 +134,14 @@ export default function App() {
       </header>
 
       <main className="content">
+        {updateReady && (
+          <div className="notice" style={{ marginBottom: 16 }}>
+            ✨ <b>網站已更新</b>　請重新載入以使用最新版本。{' '}
+            <button className="tiny" onClick={() => window.location.reload()}>
+              重新載入
+            </button>
+          </div>
+        )}
         {isPractice && (
           <div className="notice warn" style={{ marginBottom: 16 }}>
             🧪 <b>目前是測試期（到 {config.practiceUntil} 為止）</b>

@@ -30,13 +30,17 @@ function withRealized(trades) {
 }
 
 export default function History() {
-  const { myTrades, trades, students, isAdmin, authId, removeTrade, config } = useApp()
-  const [scope, setScope] = useState('me')
+  const { myTrades, trades, students, isAdmin, authId, removeTrade, config, classPause } = useApp()
+  const [pickedScope, setScope] = useState('me')
   const [side, setSide] = useState('ALL')
   const [keyword, setKeyword] = useState('')
   const [student, setStudent] = useState('')
 
-  // 班級競賽講求公開透明，全班交易紀錄開放給所有人查詢（與排行榜一致）
+  // 班級競賽講求公開透明，全班交易紀錄開放給所有人查詢（與排行榜一致）；
+  // 但開盤前後的尖峰時段暫停查詢，分散流量、也避免跟單（老師不受限）
+  const allPaused = classPause.paused && !isAdmin
+  const scope = allPaused ? 'me' : pickedScope
+
   const source = useMemo(() => {
     if (scope === 'me') return myTrades
     return student ? trades.filter((t) => t.studentId === student) : trades
@@ -94,7 +98,9 @@ export default function History() {
             <label>查詢範圍</label>
             <select value={scope} onChange={(e) => setScope(e.target.value)}>
               <option value="me">我的交易</option>
-              <option value="all">全班交易</option>
+              <option value="all" disabled={allPaused}>
+                {allPaused ? `全班交易（${classPause.until} 後開放）` : '全班交易'}
+              </option>
             </select>
           </div>
           {scope === 'all' && (
@@ -125,6 +131,14 @@ export default function History() {
             <input value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="例如 2330" />
           </div>
         </div>
+
+        {allPaused && (
+          <div className="notice warn" style={{ marginTop: 14 }}>
+            ⏸ <b>全班交易查詢暫停中，{classPause.until} 後恢復</b>
+            {'　'}每天 {classPause.windows.join('、')} 是開盤前後的尖峰時段，為了分散流量、也讓大家獨立判斷不跟單，暫停查詢全班交易。
+            {'你自己的交易紀錄隨時都可以查。'}
+          </div>
+        )}
 
         <div className="row" style={{ marginTop: 14 }}>
           <span className="badge brand">共 {rows.length} 筆</span>

@@ -3,10 +3,16 @@ import { backend } from '../services/backend.js'
 import { DEFAULT_CONFIG } from '../services/defaults.js'
 import { loadStockList, fetchCloses } from '../services/prices.js'
 import { makePriceLookup, buildCalendar, rankAll, rankGroups, snapshot, navSeries, FX_CODE } from '../lib/portfolio.js'
-import { marketSession, usMarketSession } from '../lib/market.js'
+import { marketSession, usMarketSession, classTradesPause } from '../lib/market.js'
+import { hasNewVersion } from '../lib/version.js'
 import { isAdminId } from '../firebase.js'
 
 const AppContext = createContext(null)
+
+/** 離開分頁超過這麼久，切回來時自動重抓資料 */
+const REFRESH_AFTER_HIDDEN = 10 * 60 * 1000
+/** 分頁一直開著時，多久檢查一次網站有沒有新版 */
+const VERSION_POLL_MS = 5 * 60 * 1000
 
 export function useApp() {
   const ctx = useContext(AppContext)
@@ -333,6 +339,13 @@ export function AppProvider({ children }) {
     [config.tradingWindow, clockTick],
   )
 
+  /** 全班交易查詢的暫停時段（尖峰流量＋避免跟單） */
+  const classPause = useMemo(
+    () => classTradesPause(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [clockTick],
+  )
+
   const tradesByStudent = useMemo(() => {
     const map = {}
     for (const t of trades) {
@@ -551,6 +564,50 @@ export function AppProvider({ children }) {
     [authId, notify, loadAll, syncPrices],
   )
 
+  /*
+   * 切回分頁時自動更新。
+   * 網站已部署新版 → 直接重新載入；否則離開超過 REFRESH_AFTER_HIDDEN 才重抓資料，
+   * 頻繁切換分頁不會一直吃 Firestore 讀取額度。
+   * 一直開著不切走的分頁則定期檢查版本，有新版只提示、不打斷操作。
+   */
+  const [updateReady, setUpdateReady] = useState(false)
+  useEffect(() => {
+    let hiddenAt = document.hidden ? Date.now() : null
+    let checking = false
+
+    const onReturn = async () => {
+      if (checking) return
+      checking = true
+      const away = hiddenAt ? Date.now() - hiddenAt : 0
+      hiddenAt = null
+      try {
+        if (await hasNewVersion()) return window.location.reload()
+        if (authId && !needsJoin && away >= REFRESH_AFTER_HIDDEN) await actions.refresh()
+      } catch {
+        /* 更新失敗時畫面會顯示錯誤訊息，這裡不必再處理 */
+      } finally {
+        checking = false
+      }
+    }
+    const onVisibility = () => {
+      if (document.hidden) hiddenAt = Date.now()
+      else onReturn()
+    }
+    // 從瀏覽器的上一頁快取還原時不一定會觸發 visibilitychange
+    const onPageShow = (e) => e.persisted && onReturn()
+    const timer = setInterval(async () => {
+      if (!document.hidden && (await hasNewVersion())) setUpdateReady(true)
+    }, VERSION_POLL_MS)
+
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('pageshow', onPageShow)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('pageshow', onPageShow)
+      clearInterval(timer)
+    }
+  }, [authId, needsJoin, actions])
+
   const value = {
     // 狀態
     mode: backend.mode,
@@ -582,6 +639,8 @@ export function AppProvider({ children }) {
     isPractice,
     session,
     usSession,
+    classPause,
+    updateReady,
     lastTradingDay,
     tradesByStudent,
     mySnapshot,

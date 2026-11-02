@@ -152,8 +152,9 @@ export default function Trade() {
     }
     if (!stock) return '請先在上方「選擇股票」搜尋並點選一檔股票（例如輸入 2330 後點台積電，或輸入 AAPL 買美股）'
     if (usBlocked) {
-      return `現在是${usSession.label}（台灣時間 ${usSession.time}），本競賽以收盤價成交，美股盤中不開放下單。` +
-        `美股於台灣時間 ${usSession.opensAt} 開盤，${usSession.reopenAt} 之後即可用這一盤的收盤價交易。`
+      return `現在是${usSession.label}（台灣時間 ${usSession.time}），美股暫停下單。` +
+        `美股於台灣時間 ${usSession.opensAt} 開盤，本競賽以收盤價成交，盤中不開放下單；` +
+        `收盤後清晨的美股報價容易出錯，為確保以正確的收盤價成交，台灣時間 ${usSession.reopenAt} 之後才開放交易。`
     }
     if (loadingQuote) return '報價載入中，請稍候…'
     if (quoteError) return `取得報價失敗：${quoteError}`
@@ -570,8 +571,8 @@ export default function Trade() {
           <br />
           • 一律以 <b>{effectiveDate}</b> 的收盤價成交，不可指定價格
           <br />
-          • <b>該股票所屬市場開盤期間不開放下單</b>（台股平日 09:00–14:00、美股台灣時間 {usSession.opensAt}–
-          {usSession.reopenAt}，日光節約時間自動調整）
+          • <b>該股票所屬市場開盤期間不開放下單</b>
+          （台股平日 09:00–14:00、美股台灣時間 {usSession.opensAt} 至隔天 {usSession.reopenAt}，含收盤後報價確認時間）
           <br />
           • 六日與休市日全天開放，以最近一個交易日的收盤價成交
           <br />
