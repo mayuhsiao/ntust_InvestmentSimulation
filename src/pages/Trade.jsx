@@ -5,6 +5,7 @@ import StockSearch from '../components/StockSearch.jsx'
 import LineChart from '../components/LineChart.jsx'
 import { fetchQuote } from '../services/prices.js'
 import { settleTrade } from '../lib/fees.js'
+import { orderRejection } from '../lib/market.js'
 import { money, pct, price as fmtPrice, signedMoney, tone, lots } from '../lib/format.js'
 
 export default function Trade() {
@@ -23,6 +24,8 @@ export default function Trade() {
     session,
     usSession,
     lookup,
+    today,
+    mergeQuote,
   } = useApp()
 
   const [stock, setStock] = useState(null)
@@ -45,16 +48,16 @@ export default function Trade() {
     setTradeDate(lastTradingDay)
   }, [lastTradingDay])
 
-  /*
-   * 選到股票就抓該檔的日收盤價。
-   * 美股開盤／收盤定案的那一刻也要重抓，否則畫面停留整晚會一直拿著舊的收盤價
-   */
+  // 報價一律查到今天，不受結算日限制：結算日可能還停在舊的一天
+  const quoteEnd = config.endDate < today ? config.endDate : today
+
+  /* 選到股票就抓該檔的日收盤價 */
   useEffect(() => {
     if (!stock?.code) return setQuote(null)
     let cancelled = false
     setLoadingQuote(true)
     setQuoteError('')
-    fetchQuote(stock.code, config.startDate, config.endDate < lastTradingDay ? config.endDate : lastTradingDay)
+    fetchQuote(stock.code, config.startDate, quoteEnd)
       .then((q) => {
         if (!cancelled) setQuote(q)
       })
@@ -68,17 +71,18 @@ export default function Trade() {
     return () => {
       cancelled = true
     }
-    // usSession.blocked 是刻意放進來的時間觸發器
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stock?.code, config.startDate, config.endDate, lastTradingDay, usSession.blocked])
+  }, [stock?.code, config.startDate, quoteEnd])
 
-  /* 該市場盤中時每分鐘靜默更新一次，讓盤中參考價跟上證交所即時行情 */
+  /*
+   * 頁面開著時每分鐘靜默更新一次：盤中參考價跟上證交所即時行情，
+   * 收盤價定案後也會自動換成新價，不會一直停在選股當下的舊報價
+   */
   useEffect(() => {
-    if (!stock?.code || !quote?.marketOpen) return
+    if (!stock?.code) return
     let cancelled = false
-    const end = config.endDate < lastTradingDay ? config.endDate : lastTradingDay
     const id = setInterval(() => {
-      fetchQuote(stock.code, config.startDate, end)
+      if (document.hidden) return
+      fetchQuote(stock.code, config.startDate, quoteEnd)
         .then((q) => {
           if (!cancelled) setQuote(q)
         })
@@ -90,28 +94,34 @@ export default function Trade() {
       cancelled = true
       clearInterval(id)
     }
-  }, [stock?.code, quote?.marketOpen, config.startDate, config.endDate, lastTradingDay])
+  }, [stock?.code, config.startDate, quoteEnd])
 
   const dates = useMemo(() => (quote?.closes ? Object.keys(quote.closes).sort() : []), [quote])
 
+  /* 報價比結算日還新（分頁開著跨過收盤）→ 併回全站報價，結算日與淨值才會跟上 */
+  useEffect(() => {
+    if (quote && dates.length && dates[dates.length - 1] > lastTradingDay) mergeQuote(quote)
+  }, [quote, dates, lastTradingDay, mergeQuote])
+
   /**
    * 實際採用的收盤價與它的日期。
-   * 該日無報價時（停牌、或美股與台股交易日不同步）往前取最近一筆，
-   * 並如實顯示是哪一天的收盤價。
+   * 學生一律用該檔最新一筆已定案的收盤價（停牌、或美股與台股交易日不同步時，
+   * 如實顯示是哪一天）；老師回補歷史時才依選定的日期往前取。
    */
   const execDate = useMemo(() => {
-    if (!quote?.closes) return null
+    if (!dates.length) return null
+    if (!isAdmin) return dates[dates.length - 1]
     if (quote.closes[effectiveDate] != null) return effectiveDate
     const before = dates.filter((d) => d <= effectiveDate)
     return before.length ? before[before.length - 1] : null
-  }, [quote, effectiveDate, dates])
+  }, [quote, effectiveDate, dates, isAdmin])
 
   const execPrice = execDate ? quote.closes[execDate] : null
 
   const prevPrice = useMemo(() => {
-    const before = dates.filter((d) => d < effectiveDate)
+    const before = dates.filter((d) => d < (execDate || effectiveDate))
     return before.length ? quote.closes[before[before.length - 1]] : null
-  }, [dates, quote, effectiveDate])
+  }, [dates, quote, execDate, effectiveDate])
 
   const change = execPrice != null && prevPrice != null ? execPrice - prevPrice : null
 
@@ -187,9 +197,25 @@ export default function Trade() {
     if (problem || !estimate || !stock) return
     setBusy(true)
     try {
+      if (!isAdmin) {
+        // 頁面可能已經開了一整天，按下確認當下再向伺服器確認時段與成交價，不能相信畫面上的舊資料
+        const fresh = await fetchQuote(stock.code, config.startDate, config.endDate, { fresh: true }).catch(() => {
+          throw new Error('無法向伺服器確認最新報價，這筆尚未成交，請稍後再試')
+        })
+        setQuote(fresh)
+        const reason = orderRejection(fresh, {
+          date: execDate,
+          price: execPrice,
+          enabled: config.tradingWindow !== 'always',
+        })
+        if (reason) {
+          notify(reason, 'error')
+          return
+        }
+      }
       await addTrade({
         studentId: targetStudent,
-        date: effectiveDate,
+        date: effectiveDate > execDate ? effectiveDate : execDate,
         side,
         code: stock.code,
         name: stock.name || quote?.name || '',
@@ -369,7 +395,7 @@ export default function Trade() {
 
       {/* ---------------- 下單面板 ---------------- */}
       <div className="stack">
-        <Card title="下單" sub={`以 ${effectiveDate} 收盤價成交`}>
+        <Card title="下單" sub={`以 ${execDate || effectiveDate} 收盤價成交`}>
           <div className="stack sm">
             <div className="seg">
               <button className={side === 'BUY' ? 'active' : ''} onClick={() => setSide('BUY')}>
@@ -569,7 +595,7 @@ export default function Trade() {
         <div className="notice">
           <b>交易規則</b>
           <br />
-          • 一律以 <b>{effectiveDate}</b> 的收盤價成交，不可指定價格
+          • 一律以 <b>{execDate || effectiveDate}</b> 的收盤價成交，不可指定價格
           <br />
           • <b>該股票所屬市場開盤期間不開放下單</b>
           （台股平日 09:00–14:00、美股台灣時間 {usSession.opensAt} 至隔天 {usSession.reopenAt}，含收盤後報價確認時間）

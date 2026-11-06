@@ -11,8 +11,8 @@ const LIST_TTL = 6 * 60 * 60 * 1000 // 6 小時
 
 let listMemo = null
 
-async function getJson(url) {
-  const res = await fetch(url, { headers: { Accept: 'application/json' } })
+async function getJson(url, init = {}) {
+  const res = await fetch(url, { headers: { Accept: 'application/json' }, ...init })
   let body = null
   try {
     body = await res.json()
@@ -146,8 +146,14 @@ export async function fetchCloses(codes, start, end) {
   return { results, calendar: [...calendar].sort(), today }
 }
 
-/** 單檔查詢（下單頁即時帶出收盤價用） */
-export async function fetchQuote(code, start, end) {
+/**
+ * 單檔查詢（下單頁即時帶出收盤價用）
+ * @param {boolean} [opts.fresh] 略過瀏覽器與 CDN 快取，下單前確認用
+ */
+export async function fetchQuote(code, start, end, { fresh = false } = {}) {
   const qs = new URLSearchParams({ code, start, end })
-  return getJson(`${API}/stock-price?${qs}`)
+  if (!fresh) return getJson(`${API}/stock-price?${qs}`)
+  qs.set('fresh', '1')
+  qs.set('t', String(Date.now()))
+  return getJson(`${API}/stock-price?${qs}`, { cache: 'no-store' })
 }

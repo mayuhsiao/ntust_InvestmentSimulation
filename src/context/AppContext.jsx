@@ -13,6 +13,8 @@ const AppContext = createContext(null)
 const REFRESH_AFTER_HIDDEN = 10 * 60 * 1000
 /** 分頁一直開著時，多久檢查一次網站有沒有新版 */
 const VERSION_POLL_MS = 5 * 60 * 1000
+/** 分頁一直開著時，多久補抓一次過期的報價 */
+const PRICE_POLL_MS = 10 * 60 * 1000
 
 export function useApp() {
   const ctx = useContext(AppContext)
@@ -233,8 +235,8 @@ export function AppProvider({ children }) {
             closes: data.closes,
             from: start,
             to: end,
-            // server 因為尚未收盤而保留了今日報價 → 收盤後需要再抓一次
-            pending: Boolean(data.intraday),
+            // server 因為尚未收盤而保留了今日報價，或開盤前今天還沒有收盤價 → 收盤後需要再抓一次
+            pending: Boolean(data.intraday) || (data.closes[end] == null && !marketClosedNow()),
             intradayDate: data.intraday?.date || null,
           }
         }
@@ -557,12 +559,38 @@ export function AppProvider({ children }) {
         return next
       },
       refresh: () => loadAll().then(({ cfg, tradeList, priceCache }) => syncPrices({ cfg, tradeList, priceCache })),
+      /** 下單頁拿到比快取新的收盤價時併進全站報價（不回寫全班共用的快取） */
+      mergeQuote(q) {
+        const code = String(q.code).toUpperCase()
+        const prev = pricesRef.current
+        const old = prev[code]
+        storePrices({
+          ...prev,
+          [code]: {
+            ...old,
+            code,
+            name: old?.name || q.name || '',
+            market: old?.market || q.market || '',
+            currency: old?.currency || q.currency || 'TWD',
+            closes: { ...(old?.closes || {}), ...q.closes },
+          },
+        })
+      },
       refreshPrices: (opts) => syncPrices({ force: true, ...opts }),
       reloadStockList: () => loadStockList({ force: true }).then(setStockList),
       notify,
     }),
-    [authId, notify, loadAll, syncPrices],
+    [authId, notify, loadAll, syncPrices, storePrices],
   )
+
+  /* 分頁一直開著時定期補抓過期的報價（換日、收盤後），結算日與匯率才不會停在舊的一天 */
+  useEffect(() => {
+    if (!authId || needsJoin) return
+    const id = setInterval(() => {
+      if (!document.hidden && pricesLoadedRef.current) syncPrices()
+    }, PRICE_POLL_MS)
+    return () => clearInterval(id)
+  }, [authId, needsJoin, syncPrices])
 
   /*
    * 切回分頁時自動更新。

@@ -140,3 +140,37 @@ export function classTradesPause(now = Date.now()) {
   const hit = CLASS_TRADES_PAUSES.find(([from, to]) => minutes >= from && minutes < to)
   return hit ? { paused: true, until: hhmm(hit[1]), windows } : { paused: false, windows }
 }
+
+/**
+ * 學生下單前的最後確認
+ * ------------------------------------------------------------------
+ * 下單頁可能已經開了一整天：開盤前先選好股票、填好張數，收盤後看完走勢才按確認，
+ * 就會用昨天的收盤價買賣已知漲跌的股票。所以按下確認時一律重新向伺服器取得報價，
+ * 時段以伺服器時間判斷，成交價必須正是目前最新一筆已定案的收盤價。
+ *
+ * @param {object} quote        剛向伺服器重新取得的報價（fetchQuote 的 fresh 模式）
+ * @param {string} opts.date    畫面上準備成交的收盤價日期
+ * @param {number} opts.price   畫面上準備成交的價格
+ * @param {boolean} opts.enabled 是否啟用盤中禁止交易（老師可關閉）
+ * @returns {string|null} 不能成交的原因；可以成交回傳 null
+ */
+export function orderRejection(quote, { date, price, enabled = true }) {
+  const now = quote.serverNow ?? Date.now()
+  const closes = quote.closes || {}
+  const clock =
+    quote.market === 'US'
+      ? usMarketSession({ enabled, now })
+      : marketSession({ enabled, now, todayClosed: closes[quote.today] != null })
+
+  if (clock.blocked) {
+    return `現在是${clock.label}（台灣時間 ${clock.time}），這筆尚未成交，暫停下單中。`
+  }
+  if (quote.marketOpen) return '該市場正在交易中，收盤價還沒定案，這筆尚未成交，請於收盤後再下單。'
+
+  const latest = Object.keys(closes).sort().pop()
+  if (!latest) return '取不到收盤價，這筆尚未成交，請稍後再試。'
+  if (latest !== date || Math.abs(closes[latest] - price) > 1e-6) {
+    return `報價已更新為 ${latest} 收盤價 ${closes[latest]}，這筆尚未成交。請確認新的成交價後再按一次。`
+  }
+  return null
+}

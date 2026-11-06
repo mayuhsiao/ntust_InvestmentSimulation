@@ -63,9 +63,11 @@ export async function handleApi(pathname, params) {
         const codesParam = params.get('codes')
         const today = todayInTaipei()
         // 查詢區間已經結束 → 資料不會再變，可以放心長快取；
-        // 台股盤中則縮短快取，讓盤中參考價貼近證交所即時行情
+        // 台股盤中則縮短快取，讓盤中參考價貼近證交所即時行情；
+        // fresh=1 是下單前的最後確認，一律不快取
         let cache = 'public, max-age=180, s-maxage=300'
-        if (end < today) cache = 'public, max-age=3600, s-maxage=86400'
+        if (params.get('fresh') === '1') cache = 'no-store'
+        else if (end < today) cache = 'public, max-age=3600, s-maxage=86400'
         else if (marketSessionActiveInTaipei()) cache = 'public, max-age=30, s-maxage=60'
 
         if (codesParam) {
@@ -81,7 +83,8 @@ export async function handleApi(pathname, params) {
         return {
           status: 200,
           cache,
-          body: { ...data, today, marketClosed: marketClosedInTaipei() },
+          // serverNow：下單前以伺服器時間判斷時段，改電腦時鐘也繞不過
+          body: { ...data, today, marketClosed: marketClosedInTaipei(), serverNow: Date.now() },
         }
       }
 
